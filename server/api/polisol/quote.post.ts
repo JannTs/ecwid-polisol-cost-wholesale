@@ -1,27 +1,22 @@
 // server/api/polisol/quote.post.ts
+// server/api/polisol/quote.post.ts
 import {
   defineEventHandler,
   readBody,
   createError,
   setResponseHeader,
 } from "h3";
-import { EcwidClient } from "../../../utils/ecwid";
+import { EcwidClient } from "~~/utils/ecwid";
 import {
   toCanonLabel,
   unitPrice,
   BATCH_INDEX_TO_COUNT,
   isKvas,
   SUFFIX_BY_CONTENT,
-} from "../../../utils/ecwid";
-
-type Body = {
-  contentLabel?: string; // лейбл из радио «Вміст»
-  variantSuffix?: string; // К/Ш/Ж/М/Ч/КВ/КБ/КК (необязателен — вычислим по лейблу)
-  batchIndex?: number; // 1..5  (1→15, 2→30, 3→45, 4→60, 5→75)
-};
+} from "~~/utils/polisol";
 
 export default defineEventHandler(async (event) => {
-  // CORS (при желании ужесточите на домен магазина)
+  // --- CORS (пока звёздочка, потом можно заменить на whitelist доменов) ---
   setResponseHeader(event, "Access-Control-Allow-Origin", "*");
   setResponseHeader(
     event,
@@ -30,94 +25,105 @@ export default defineEventHandler(async (event) => {
   );
   setResponseHeader(event, "Access-Control-Allow-Methods", "POST, OPTIONS");
 
+  // --- Читаем тело запроса ---
+  const body = await readBody<{
+    contentLabel?: string;
+    batchIndex?: number;
+  }>(event);
+
+  if (!body.contentLabel || !body.batchIndex) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: "Missing contentLabel or batchIndex",
+    });
+  }
+
+  // --- Определяем канонический лейбл ---
+  const canon = toCanonLabel(body.contentLabel);
+  if (!canon) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `Unknown contentLabel: ${body.contentLabel}`,
+    });
+  }
+
+  // --- Определяем SKU-суффикс по канону ---
+  const suffix = SUFFIX_BY_CONTENT[canon];
+  if (!suffix) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `No SKU suffix for content: ${canon}`,
+    });
+  }
+
+  // --- Определяем размер партии ---
+  const batchIndex = body.batchIndex as 1 | 2 | 3 | 4 | 5;
+  const batchCount = BATCH_INDEX_TO_COUNT[batchIndex];
+  if (!batchCount) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `Invalid batchIndex: ${batchIndex}`,
+    });
+  }
+
+  // --- Цена ---
+  const unit = unitPrice(canon, batchIndex);
+
+  // --- Ecwid клиент ---
+  const ecwid = new EcwidClient(
+    process.env.NUXT_ECWID_STORE_ID!,
+    process.env.NUXT_ECWID_TOKEN!
+  );
+
+  // --- Категория (служебная "Скло-опт") ---
+  const catIdEnv = process.env.NUXT_PV_CATEGORY_ID;
+  let categoryIds: number[] | undefined = undefined;
+  if (catIdEnv) {
+    const id = Number(catIdEnv);
+    if (Number.isFinite(id) && id > 0) {
+      categoryIds = [id];
+    }
+  }
+
+  // --- Генерация читаемого имени товара ---
+  const name = isKvas(canon)
+    ? `${canon} (ціна в партії ${batchCount})`
+    : `ПОЛІСОЛ™ ${canon} (ціна в партії ${batchCount})`;
+
+  // --- Технический SKU ---
+  const techSku = `ПОЛІСОЛ-${suffix}-${batchIndex}`;
+
+  // --- Подготовка payload ---
+  const payload: any = {
+    name,
+    sku: techSku,
+    price: unit,
+    description: `Ціна за 1 банку у партії ${batchCount}.`,
+    attributes: [
+      { name: "Партія", value: String(batchCount) },
+      { name: "Вміст", value: canon },
+    ],
+  };
+  if (categoryIds) {
+    payload.categoryIds = categoryIds;
+  }
+
+  // --- Создание товара ---
   try {
-    const body = (await readBody<Body>(event)) || {};
-    const batchIndex = Number(body.batchIndex);
+    const productId = await ecwid.createProduct(payload);
 
-    if (!body.contentLabel) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: "Missing contentLabel",
-      });
-    }
-    if (!(batchIndex >= 1 && batchIndex <= 5)) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: "Invalid batchIndex",
-      });
-    }
-
-    // Канонизируем лейбл и выводим суффикс варианта (если не передан)
-    const canon = toCanonLabel(body.contentLabel);
-    const variantSuffix =
-      (body.variantSuffix && body.variantSuffix.trim()) ||
-      SUFFIX_BY_CONTENT[canon];
-    if (!variantSuffix) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: "Cannot infer variant suffix",
-      });
-    }
-
-    // Цена за 1 банку в выбранной партии
-    const unit = unitPrice(canon, batchIndex as 1 | 2 | 3 | 4 | 5);
-    const batchCount = BATCH_INDEX_TO_COUNT[batchIndex as 1 | 2 | 3 | 4 | 5];
-
-    // SKU техтовара: ПОЛІСОЛ-<суффикс>-<batchIndex>, напр. ПОЛІСОЛ-К-2
-    const techSku = `ПОЛІСОЛ-${variantSuffix}-${batchIndex}`;
-    const name = isKvas(canon)
-      ? `${canon} (ціна в партії ${batchCount})`
-      : `ПОЛІСОЛ™«${canon}»(ціна в партії ${batchCount})`;
-
-    // Доступ к Ecwid
-    const config = useRuntimeConfig();
-    const storeId = String(config.NUXT_ECWID_STORE_ID || "");
-    const token = String(config.NUXT_ECWID_TOKEN || "");
-    if (!storeId || !token) {
-      throw createError({
-        statusCode: 500,
-        statusMessage: "Missing Ecwid credentials",
-      });
-    }
-
-    const ecwid = new EcwidClient(storeId, token);
-
-    // Если такой SKU уже есть — возвращаем его
-    const existing = await ecwid.findBySku(techSku);
-    if (existing?.id) {
-      return {
-        ok: true,
-        productId: existing.id,
-        unitPrice: unit,
-        batchIndex,
-        batchCount,
-        duplicate: true,
-      };
-    }
-
-    // (Опционально) Положить в служебную категорию (если указан env NUXT_PV_CATEGORY_ID)
-    const catIdEnv = process.env.NUXT_PV_CATEGORY_ID;
-    const categoryIds = catIdEnv ? [Number(catIdEnv)] : undefined;
-
-    // Создаём техтовар с ценой за 1 банку
-    const productId = await ecwid.createProduct({
-      name,
-      sku: techSku,
-      price: unit,
-      description: `Ціна за 1 банку у партії ${batchCount}.`,
-      attributes: [
-        { name: "Партія", value: String(batchCount) },
-        { name: "Вміст", value: canon },
-      ],
-      categoryIds,
-    } as any);
-
-    return { ok: true, productId, unitPrice: unit, batchIndex, batchCount };
-  } catch (e: any) {
     return {
-      ok: false,
-      error: e?.statusMessage || e?.message || "Unknown error",
-      status: e?.statusCode || 500,
+      ok: true,
+      productId,
+      unitPrice: unit,
+      batchIndex,
+      batchCount,
     };
+  } catch (err: any) {
+    console.error("Ecwid error", err);
+    throw createError({
+      statusCode: 500,
+      statusMessage: err?.message || "Ecwid API error",
+    });
   }
 });

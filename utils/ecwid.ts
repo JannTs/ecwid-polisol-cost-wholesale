@@ -8,6 +8,22 @@ export class EcwidClient {
     this.token = token;
   }
 
+  //private async call(path: string, opts: RequestInit = {}) {
+  //  const url = `https://app.ecwid.com/api/v3/${this.storeId}${path}`;
+  //  const res = await fetch(url, {
+  //    ...opts,
+  //    headers: {
+  //      Authorization: `Bearer ${this.token}`,
+  //      "Content-Type": "application/json",
+  //      ...(opts.headers || {}),
+  //    },
+  //  });
+  //  if (!res.ok) {
+  //    throw new Error(`Ecwid API error ${res.status}: ${res.statusText}`);
+  //  }
+  //  return res.json();
+  //}
+  // utils/ecwid.ts
   private async call(path: string, opts: RequestInit = {}) {
     const url = `https://app.ecwid.com/api/v3/${this.storeId}${path}`;
     const res = await fetch(url, {
@@ -18,10 +34,25 @@ export class EcwidClient {
         ...(opts.headers || {}),
       },
     });
+
     if (!res.ok) {
-      throw new Error(`Ecwid API error ${res.status}: ${res.statusText}`);
+      const text = await res.text().catch(() => "");
+      // Попробуем вытащить message из JSON Ecwid
+      let details = text;
+      try {
+        const j = JSON.parse(text);
+        details = j?.errorMessage || j?.message || text;
+      } catch {}
+      throw new Error(
+        `Ecwid API error ${res.status}: ${res.statusText}${
+          details ? ` — ${details}` : ""
+        }`
+      );
     }
-    return res.json();
+
+    // ok
+    const data = await res.json().catch(() => ({}));
+    return data;
   }
 
   async findBySku(sku: string) {
