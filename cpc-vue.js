@@ -1,6 +1,6 @@
 (function () {
       // === Endpoints  ===
-      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; // замени на свой Vercel-домен при необходимости
+      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; 
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
 
