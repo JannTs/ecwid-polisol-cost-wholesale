@@ -1,17 +1,40 @@
 (function () {
-      // === Endpoints  ===
-      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; 
+      // === Endpoints ===
+      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; // при необходимости замени на свой домен Vercel
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
 
       // === Константы ===
       const LOCK_KEY = 'polisol_batch_lock'; // localStorage
-      const FAMILY_PREFIX = 'ПОЛІСОЛ-';           // базовое семейство для таргета
-      const RADIO_NAME = 'Вміст';
-      const BATCH_ARIA = 'розмір партії (вплив на опт.ціни)';
+      const FAMILY_PREFIX = 'ПОЛІСОЛ-';           // таргет по SKU
+      const TOOLTIP_TEXT = 'Партію зафіксовано. Щоб змінити, очистіть кошик і оберіть знову.';
 
-      // === Базовые утилиты ===
+      // Имя радио-группы может отличаться; ищем гибко
+      const RADIO_NAME_CANDIDATES = [
+            'Вміст', 'Вмiст', 'Вміст ', 'вміст', 'content', 'состав'
+      ];
+
+      // Подпись для дропдауна партии — ищем гибко
+      const BATCH_ARIA_CANDS = [
+            'розмір партії (вплив на опт.ціни)',
+            'розмір партії',
+            'размер партии',
+            'партія',
+            'партия'
+      ];
+
+      // === Утилиты ===
       function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
+
+      function ensureVue(cb) {
+            if (window.Vue && window.Vue.createApp) return cb();
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/vue@3.5.11/dist/vue.global.prod.min.js';
+            s.onload = cb;
+            s.onerror = () => console.error('[cpc] failed to load Vue CDN');
+            document.head.appendChild(s);
+      }
+
       function getSku() {
             const sels = [
                   '[itemprop="sku"]', '.product-details__product-sku', '[data-product-sku]',
@@ -30,17 +53,39 @@
       }
       function isTargetProduct() { const sku = getSku() || ''; return sku.startsWith(FAMILY_PREFIX); }
 
+      function qsAll(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+
       function findBatchInput() {
-            // Ecwid dropdown — это чаще readonly input, а отображаемый текст в .form-control__select-text
-            return document.querySelector(`input[aria-label="${BATCH_ARIA}"]`);
+            // 1) точное совпадение aria-label
+            for (const label of BATCH_ARIA_CANDS) {
+                  const el = document.querySelector(`input[aria-label="${label}"]`);
+                  if (el) return el;
+            }
+            // 2) частичное (contains) по aria-label
+            const allInputs = qsAll('input[aria-label]');
+            const el2 = allInputs.find(i => {
+                  const v = (i.getAttribute('aria-label') || '').toLowerCase();
+                  return BATCH_ARIA_CANDS.some(c => v.includes(c.toLowerCase()));
+            });
+            if (el2) return el2;
+
+            // 3) любой readonly input рядом с .form-control__select-text, содержащей число 15/30/45/60/75
+            const candidates = qsAll('.form-control input[readonly], .form-control input[tabindex="-1"]');
+            for (const inp of candidates) {
+                  const txt = inp.closest('.form-control')?.querySelector('.form-control__select-text')?.textContent?.trim() || '';
+                  if (/\b(15|30|45|60|75)\b/.test(txt)) return inp;
+            }
+            return null;
       }
+
       function readBatchCount() {
             const inp = findBatchInput(); if (!inp) return null;
-            const container = inp.closest('.form-control');
-            const txt = container?.querySelector('.form-control__select-text')?.textContent?.trim() || inp.value || '';
+            const fc = inp.closest('.form-control');
+            const txt = fc?.querySelector('.form-control__select-text')?.textContent?.trim() || inp.value || '';
             const m = txt.match(/\d+/);
-            return m ? parseInt(m[0], 10) : null; // 15 / 30 / 45 / 60 / 75
+            return m ? parseInt(m[0], 10) : null;
       }
+
       function batchCountToIndex(n) { return (n === 15 ? 1 : n === 30 ? 2 : n === 45 ? 3 : n === 60 ? 4 : n === 75 ? 5 : null); }
       function indexToBatchCount(idx) { return ({ 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 })[idx] || null; }
 
@@ -57,8 +102,8 @@
                   document.querySelector('.product-details__product-price.ec-price-item');
             return { span, box };
       }
+
       function formatUAH(n) {
-            // ₴ + узкие неразрывные пробелы между тысячными группами (U+202F), 2 знака
             const THIN_NBSP = '\u202F';
             const s = Number(n).toFixed(2);
             const [i, d] = s.split('.');
@@ -66,8 +111,29 @@
             return `₴${withThin}.${d}`;
       }
 
+      function getRadioList() {
+            // 1) по точному имени
+            for (const nm of RADIO_NAME_CANDIDATES) {
+                  const els = qsAll(`input.form-control__radio[name="${nm}"]`);
+                  if (els.length) return els;
+            }
+            // 2) имя содержит
+            const allRadios = qsAll('input.form-control__radio[name], input[type="radio"][name]');
+            const subset = allRadios.filter(r => {
+                  const n = (r.getAttribute('name') || '').toLowerCase();
+                  return RADIO_NAME_CANDIDATES.some(c => n.includes(c.toLowerCase()));
+            });
+            if (subset.length) return subset;
+
+            // 3) «всё что внутри блока опций»
+            const inBlock = qsAll('.product-details__size-item-container input[type="radio"]');
+            if (inBlock.length) return inBlock;
+
+            return [];
+      }
+
       function getCheckedContent() {
-            const list = Array.from(document.querySelectorAll(`input.form-control__radio[name="${RADIO_NAME}"]`));
+            const list = getRadioList();
             const checked = list.find(el => el.checked);
             if (!checked) return null;
             const label = document.querySelector(`label[for="${checked.id}"]`)?.textContent?.trim() || checked.value || '';
@@ -78,20 +144,43 @@
       function loadLock() { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || 'null'); } catch { return null; } }
       function clearLock() { try { localStorage.removeItem(LOCK_KEY); } catch { } }
 
-      // === Стили для disabled состояния ===
+      // === Стили
       (function ensureCpcStyles() {
             if (document.getElementById('cpc-base-style')) return;
             const st = document.createElement('style');
             st.id = 'cpc-base-style';
-            st.textContent = `.cpc-disabled{opacity:.6;user-select:none;pointer-events:none;}`;
+            st.textContent = `
+      .cpc-disabled-lite{opacity:.6;}
+      .cpc-overlay{position:absolute;inset:0;cursor:not-allowed;background:transparent;}
+    `;
             document.head.appendChild(st);
       })();
 
-      // === Vue-приложение ===
+      // === Оверлей для блокировки дропдауна (и подсказка title)
+      function lockBatchSelectUI() {
+            const sel = findBatchInput(); const fc = sel?.closest('.form-control'); if (!fc) return;
+            fc.classList.add('cpc-disabled-lite');
+            fc.style.position = fc.style.position || 'relative';
+            if (!fc.querySelector('.cpc-overlay')) {
+                  const ov = document.createElement('div');
+                  ov.className = 'cpc-overlay';
+                  ov.title = TOOLTIP_TEXT;
+                  fc.appendChild(ov);
+            } else {
+                  fc.querySelector('.cpc-overlay').setAttribute('title', TOOLTIP_TEXT);
+            }
+      }
+      function unlockBatchSelectUI() {
+            const sel = findBatchInput(); const fc = sel?.closest('.form-control'); if (!fc) return;
+            fc.classList.remove('cpc-disabled-lite');
+            const ov = fc.querySelector('.cpc-overlay'); if (ov) ov.remove();
+      }
+
+      // === Vue-приложение
       function mountApp(pricing) {
             const { createApp, ref, computed, onMounted } = Vue;
 
-            // Впишемся в #productDescription: создадим якорь под таблицу
+            // якорь под таблицу
             let host = document.getElementById('cpc-polisol-summary');
             if (!host) {
                   host = document.createElement('div');
@@ -105,11 +194,10 @@
                   setup() {
                         const originalPriceText = ref(null);
                         const locked = ref(false);
-                        const batchIndex = ref(null); // 1..5
+                        const batchIndex = ref(null);
                         const unitPrice = ref(0);
                         const contentLabel = ref('');
-                        const variantSuffix = ref('');
-                        const cartItems = ref([]);   // только позиции нашей партии
+                        const cartItems = ref([]);
                         const batchCount = computed(() => batchIndex.value ? indexToBatchCount(batchIndex.value) : null);
 
                         function updatePriceUI() {
@@ -119,24 +207,29 @@
                               if (unitPrice.value) {
                                     span.textContent = formatUAH(unitPrice.value);
                                     if (box) box.setAttribute('content', String(unitPrice.value));
-                              } else {
-                                    if (originalPriceText.value) span.textContent = originalPriceText.value;
+                              } else if (originalPriceText.value) {
+                                    span.textContent = originalPriceText.value;
                               }
                         }
 
                         async function refreshUnitPrice() {
                               const bCount = readBatchCount();
                               const idx = bCount ? batchCountToIndex(bCount) : null;
+
+                              // авто-фиксация при первом выборе
+                              if (idx && !locked.value) {
+                                    locked.value = true;
+                                    saveLock({ locked: true, batchIndex: idx });
+                                    lockBatchSelectUI();
+                              }
+
                               batchIndex.value = idx;
 
                               const lbl = getCheckedContent();
                               contentLabel.value = lbl || '';
 
-                              const canon = lbl ? lbl.replace(/[«»"]/g, '').trim() : '';
-                              const suffix = canon && pricing.suffixByContent[canon] ? pricing.suffixByContent[canon] : null;
-                              variantSuffix.value = suffix || '';
-
-                              if (idx && canon) {
+                              if (idx && lbl) {
+                                    const canon = lbl.replace(/[«»"]/g, '').trim();
                                     const row = pricing.pricing[canon] || null;
                                     unitPrice.value = row ? (row[idx - 1] || 0) : 0;
                               } else {
@@ -145,75 +238,16 @@
                               updatePriceUI();
                         }
 
-                        function ensureLockVisibility() {
-                              const bCount = readBatchCount();
-                              const lockBox = document.getElementById('cpc-batch-lock');
-                              if (!lockBox) return;
-                              if (bCount) {
-                                    lockBox.style.display = 'flex';
-                                    lockBox.querySelector('input').disabled = false;
-                              } else {
-                                    lockBox.style.display = 'none';
-                                    lockBox.querySelector('input').disabled = true;
-                              }
-                        }
-
-                        function renderLockCheckbox() {
-                              if (document.getElementById('cpc-batch-lock')) return;
-                              const target = findBatchInput()?.closest('.form-control');
-                              if (!target) return;
-                              const wrap = document.createElement('div');
-                              wrap.id = 'cpc-batch-lock';
-                              wrap.style.display = 'none';
-                              wrap.style.marginTop = '8px';
-                              wrap.style.alignItems = 'center';
-                              wrap.style.gap = '8px';
-                              wrap.innerHTML = `
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-              <input type="checkbox" checked />
-              <span>Блокування партії</span>
-            </label>
-          `;
-                              target.appendChild(wrap);
-
-                              const cb = wrap.querySelector('input');
-                              cb.addEventListener('change', async () => {
-                                    if (!cb.checked) {
-                                          const ok = window.confirm('Розблокувати партію? Кошик буде очищено.');
-                                          if (!ok) { cb.checked = true; return; }
-                                          Ecwid.Cart.clear(() => {
-                                                clearLock();
-                                                locked.value = false;
-                                                const sel = findBatchInput();
-                                                if (sel) sel.closest('.form-control')?.classList.remove('cpc-disabled');
-                                                unitPrice.value = 0;
-                                                updatePriceUI();
-                                                renderCartTable([]);
-                                          });
-                                    } else {
-                                          const idx = batchIndex.value;
-                                          if (!idx) { cb.checked = false; return; }
-                                          locked.value = true;
-                                          saveLock({ locked: true, batchIndex: idx });
-                                          findBatchInput()?.closest('.form-control')?.classList.add('cpc-disabled');
-                                    }
-                              });
-                        }
-
                         function applyLockFromState() {
                               const st = loadLock();
                               if (st && st.locked && st.batchIndex) {
                                     locked.value = true;
                                     batchIndex.value = st.batchIndex;
-                                    const cb = document.querySelector('#cpc-batch-lock input');
-                                    if (cb) cb.checked = true;
-                                    findBatchInput()?.closest('.form-control')?.classList.add('cpc-disabled');
+                                    lockBatchSelectUI();
                               }
                         }
 
-                        function renderCartTable(items) {
-                              cartItems.value = items;
-                        }
+                        function renderCartTable(items) { cartItems.value = items; }
                         function sumForItems(items) { return items.reduce((a, it) => a + (it.price * it.quantity), 0); }
 
                         function skuMatchesOurBatch(sku, idx) {
@@ -227,11 +261,7 @@
                                     if (!idx) { renderCartTable([]); return; }
                                     const ours = (cart.items || []).filter(it => skuMatchesOurBatch(it.sku, idx));
                                     renderCartTable(ours.map((it, i) => ({
-                                          n: i + 1,
-                                          name: it.name,
-                                          quantity: it.quantity,
-                                          price: it.price,
-                                          sum: it.quantity * it.price
+                                          n: i + 1, name: it.name, quantity: it.quantity, price: it.price, sum: it.quantity * it.price
                                     })));
                               });
                         }
@@ -251,16 +281,9 @@
                                     if (!idx) { return alert('Оберіть партію спочатку.'); }
                                     const lbl = getCheckedContent();
                                     if (!lbl) { return alert('Оберіть «Вміст».'); }
+
                                     const qtyInp = findQtyInput();
                                     const qty = Math.max(1, parseInt((qtyInp?.value || '1'), 10) || 1);
-
-                                    if (!locked.value) {
-                                          const cb = document.querySelector('#cpc-batch-lock input');
-                                          if (cb) cb.checked = true;
-                                          locked.value = true;
-                                          saveLock({ locked: true, batchIndex: idx });
-                                          findBatchInput()?.closest('.form-control')?.classList.add('cpc-disabled');
-                                    }
 
                                     Ecwid.Cart.get(async function (cart) {
                                           const batchMax = indexToBatchCount(idx);
@@ -272,8 +295,7 @@
                                           }
 
                                           try {
-                                                // suffix не отправляем — сервер сам определит
-                                                const payload = { contentLabel: lbl, batchIndex: idx };
+                                                const payload = { contentLabel: lbl, batchIndex: idx }; // суффикс сервер определит сам
                                                 const r = await fetch(QUOTE_ENDPOINT, {
                                                       method: 'POST',
                                                       headers: { 'Content-Type': 'application/json' },
@@ -301,17 +323,12 @@
                               let timer = null;
                               const mo = new MutationObserver(() => {
                                     clearTimeout(timer);
-                                    timer = setTimeout(() => {
-                                          ensureLockVisibility();
-                                          refreshUnitPrice();
-                                    }, 50);
+                                    timer = setTimeout(() => { refreshUnitPrice(); }, 60);
                               });
                               mo.observe(root, { childList: true, subtree: true });
                         }
 
                         onMounted(() => {
-                              renderLockCheckbox();
-                              ensureLockVisibility();
                               applyLockFromState();
                               refreshUnitPrice();
                               attachAddToCartInterceptor();
@@ -370,27 +387,25 @@
 
                         // уход/не наш товар — мягкий teardown
                         if (!isTargetProduct()) {
-                              const host = document.getElementById('cpc-polisol-summary');
-                              if (host) host.remove();
-                              const sel = findBatchInput();
-                              if (sel) sel.closest('.form-control')?.classList.remove('cpc-disabled');
+                              const host = document.getElementById('cpc-polisol-summary'); if (host) host.remove();
+                              unlockBatchSelectUI();
                               return;
                         }
 
-                        // анти-дубль монтирования на один и тот же productId
+                        // анти-дубль по productId
                         if (window.__cpc_vue_pid === page.productId) return;
                         window.__cpc_vue_pid = page.productId;
 
                         try {
-                              const res = await fetch(PRICING_ENDPOINT);
+                              const res = await fetch(PRICING_ENDPOINT, { cache: 'no-store' });
                               const pricing = await res.json();
                               if (!pricing?.ok) throw new Error('pricing not ok');
-                              mountApp(pricing);
+
+                              ensureVue(() => mountApp(pricing));
                         } catch (e) {
-                              console.error('Failed to load pricing', e);
+                              console.error('[cpc] Failed to load pricing or Vue', e);
                         }
                   });
             });
       });
-
 })();
