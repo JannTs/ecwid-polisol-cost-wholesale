@@ -195,7 +195,7 @@
       }
 
       // === Канонизация лейбла "Вміст" к ключам таблицы прайса
-      function canonContentLabel(label) {
+      /* function canonContentLabel(label) {
             if (!label) return null;
             const t = label.toLowerCase().replace(/[«»"]/g, '').trim();
 
@@ -217,7 +217,7 @@
 
             // fallback — вернём очищенный исходник
             return label.replace(/[«»"]/g, '').trim();
-      }
+      } */
 
 
       function saveLock(st) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(st)); } catch { } }
