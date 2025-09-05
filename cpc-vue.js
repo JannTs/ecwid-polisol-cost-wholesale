@@ -10,7 +10,7 @@
       // Кандидаты имён радио-группы «Вміст»
       const RADIO_NAME_CANDIDATES = ['Вміст', 'Вмiст', 'Вміст ', 'вміст', 'content', 'состав'];
 
-      // Подпись для дропдауна партии — ищем гибко
+      // Подписи для дропдауна партии — ищем гибко
       const BATCH_ARIA_CANDS = [
             'розмір партії (вплив на опт.ціни)',
             'розмір партії',
@@ -54,7 +54,7 @@
             return sku.startsWith(FAMILY_PREFIX);
       }
 
-      // Найти input (aria-label) для блока партии
+      // Найти input (aria-label) и control для блока партии
       function findBatchInput() {
             for (const label of BATCH_ARIA_CANDS) {
                   const el = document.querySelector(`input[aria-label="${label}"]`);
@@ -74,8 +74,6 @@
             }
             return null;
       }
-
-      // === Сначала findBatchControl, затем readBatchCount ===
       function findBatchControl() {
             const aria = findBatchInput();
             if (aria) return aria.closest('.form-control') || null;
@@ -91,12 +89,10 @@
             }
             return null;
       }
-
       function readBatchCount() {
             const fc = findBatchControl();
             if (!fc) return null;
 
-            // Нативный <select>
             const sel = fc.querySelector('select.form-control__select');
             if (sel) {
                   const idx = sel.selectedIndex ?? -1; // 0 — placeholder "Виберіть"
@@ -109,7 +105,6 @@
                   }
             }
 
-            // Псевдо-select Ecwid
             const txtA = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
             const mA = txtA.match(/\b(15|30|45|60|75)\b/);
             if (mA) return parseInt(mA[0], 10);
@@ -236,6 +231,15 @@
             return null;
       }
 
+      // Вспомогательное: извлечь индекс партии из SKU (…-1..5)
+      function skuBatchIndex(sku) {
+            const m = (sku || '').match(/-(\d)$/);
+            return m ? parseInt(m[1], 10) : null;
+      }
+      function skuIsFamily(sku) {
+            return !!(sku || '').startsWith(FAMILY_PREFIX);
+      }
+
       // === Vue-приложение (без «блокировок» dropdown)
       function mountApp(pricing) {
             const { createApp, ref, computed, onMounted } = Vue;
@@ -342,10 +346,27 @@
                                     const qtyInp = findQtyInput();
                                     const qty = Math.max(1, parseInt((qtyInp?.value || '1'), 10) || 1);
 
-                                    // лимит по сумме партии (для текущего суффикса партии)
+                                    // Проверяем корзину на конфликт партий
                                     Ecwid.Cart.get(async function (cart) {
+                                          const items = (cart.items || []).filter(it => skuIsFamily(it.sku));
+                                          const presentIdx = new Set(items.map(it => skuBatchIndex(it.sku)).filter(Boolean));
+
+                                          if (presentIdx.size > 0 && (!presentIdx.has(idx) || presentIdx.size > 1)) {
+                                                // В корзине есть служебные товары другой партии
+                                                const human = (i) => indexToBatchCount(i) || '?';
+                                                const existing = Array.from(presentIdx).map(human).join(', ');
+                                                const chosen = human(idx);
+                                                alert(
+                                                      `У кошику вже є товари для іншої партії ( ${existing} ).\n` +
+                                                      `Ви обрали партію ${chosen}. Видаліть, будь ласка, позиції іншої партії з кошика та спробуйте ще раз.`
+                                                );
+                                                return; // не добавляем
+                                          }
+
+                                          // лимит по сумме партии (для текущего суффикса партии)
                                           const batchMax = indexToBatchCount(idx);
-                                          const current = (cart.items || []).filter(it => skuMatchesOurBatch(it.sku, idx))
+                                          const current = items
+                                                .filter(it => skuMatchesOurBatch(it.sku, idx))
                                                 .reduce((acc, it) => acc + it.quantity, 0);
                                           const remaining = batchMax - current;
                                           if (qty > remaining) {
@@ -464,3 +485,4 @@
             });
       });
 })();
+
