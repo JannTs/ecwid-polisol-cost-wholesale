@@ -1,6 +1,6 @@
 // server/api/polisol/quote.post.ts
-// server/api/polisol/quote.post.ts
-import { defineEventHandler, readBody, createError, setResponseHeader } from 'h3';
+import { defineEventHandler, readBody, setResponseHeader, createError } from 'h3';
+//import { defineEventHandler, readBody, createError, setResponseHeader } from 'h3';
 import { EcwidClient } from '~~/utils/ecwid';
 import {
   toCanonLabel,
@@ -11,7 +11,7 @@ import {
 } from '~~/utils/polisol';
 
 export default defineEventHandler(async (event) => {
-  // --- CORS (пока звёздочка, потом можно заменить на whitelist доменов) ---
+  // CORS — чтобы браузер не блокировал ответ с ошибкой тоже
   setResponseHeader(event, 'Access-Control-Allow-Origin', '*');
   setResponseHeader(event, 'Access-Control-Allow-Headers', 'Content-Type, Authorization');
   setResponseHeader(event, 'Access-Control-Allow-Methods', 'POST, OPTIONS');
