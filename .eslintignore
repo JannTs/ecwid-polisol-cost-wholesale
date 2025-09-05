@@ -1,0 +1,11 @@
+node_modules
+.nuxt
+.output
+.nitro
+.cache
+dist
+dev
+nuxt
+package.bak.json
+
+ 

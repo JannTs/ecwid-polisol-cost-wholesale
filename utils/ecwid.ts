@@ -30,13 +30,13 @@ export class EcwidClient {
       ...opts,
       headers: {
         Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         ...(opts.headers || {}),
       },
     });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
+      const text = await res.text().catch(() => '');
       // Попробуем вытащить message из JSON Ecwid
       let details = text;
       try {
@@ -44,9 +44,7 @@ export class EcwidClient {
         details = j?.errorMessage || j?.message || text;
       } catch {}
       throw new Error(
-        `Ecwid API error ${res.status}: ${res.statusText}${
-          details ? ` — ${details}` : ""
-        }`
+        `Ecwid API error ${res.status}: ${res.statusText}${details ? ` — ${details}` : ''}`
       );
     }
 
@@ -75,7 +73,7 @@ export class EcwidClient {
       name: p.name,
       sku: p.sku,
       price: p.price,
-      description: p.description || "",
+      description: p.description || '',
       enabled: true,
       categoryIds: p.categoryIds || [],
       attributes: (p.attributes || []).map((a) => ({
@@ -84,7 +82,7 @@ export class EcwidClient {
       })),
     };
     const data = await this.call(`/products`, {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify(body),
     });
     return data.id; // ID нового товара
