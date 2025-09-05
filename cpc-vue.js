@@ -304,8 +304,72 @@
                                     box.setAttribute('content', numeric);
                               }
                         }
+                        //==========
+                        function norm(s) {
+                              return (s || '')
+                                    .toLowerCase()
+                                    .replace(/[«»"'`]/g, '')      // убираем кавычки
+                                    .replace(/\u2019/g, "'")      // типографский апостроф -> обычный
+                                    .replace(/\s+/g, ' ')
+                                    .trim();
+                        }
 
+                        function pickPricingKey(label, pricingKeys) {
+                              const want = norm(label);
+                              const keysNorm = pricingKeys.map(k => ({ raw: k, n: norm(k) }));
 
+                              // 1) Сильные маркеры содержимого
+                              const has = (t) => want.includes(t);
+
+                              if (has('білий') && (has('квас') || has('трип'))) {
+                                    const hit = keysNorm.find(k => k.n.includes('білий'));
+                                    if (hit) return hit.raw;
+                              }
+                              if (has('коріандр')) {
+                                    const hit = keysNorm.find(k => k.n.includes('коріандр'));
+                                    if (hit) return hit.raw;
+                              }
+                              if (has('квас') || has('трип')) {
+                                    const hit = keysNorm.find(k => k.n.includes('квас') && !k.n.includes('білий') && !k.n.includes('коріандр'));
+                                    if (hit) return hit.raw;
+                              }
+
+                              if (has('шипшин')) {
+                                    const hit = keysNorm.find(k => k.n.includes('шипшин'));
+                                    if (hit) return hit.raw; // → "З шипшиною"
+                              }
+                              if (has('журавлин')) {
+                                    const hit = keysNorm.find(k => k.n.includes('журавлин'));
+                                    if (hit) return hit.raw; // → "З журавлиною"
+                              }
+                              if (has('матус')) {
+                                    const hit = keysNorm.find(k => k.n.includes('матус'));
+                                    if (hit) return hit.raw; // → "Матусине здоров'я"
+                              }
+                              if (has('чоловіч')) {
+                                    const hit = keysNorm.find(k => k.n.includes('чоловіч'));
+                                    if (hit) return hit.raw; // → "Чоловіча сила"
+                              }
+                              if (has('класич')) {
+                                    const hit = keysNorm.find(k => k.n.includes('класич'));
+                                    if (hit) return hit.raw; // → "Класичний"
+                              }
+
+                              // 2) Ровное совпадение после нормализации
+                              {
+                                    const eq = keysNorm.find(k => k.n === want);
+                                    if (eq) return eq.raw;
+                              }
+                              // 3) Подстрока
+                              {
+                                    const sub = keysNorm.find(k => k.n.includes(want) || want.includes(k.n));
+                                    if (sub) return sub.raw;
+                              }
+
+                              return null; // не нашли (лучше явно провалиться в 0)
+                        }
+
+                        //===========
                         async function refreshUnitPrice() {
                               const bCount = readBatchCount();
                               const idx = bCount ? batchCountToIndex(bCount) : null;
@@ -323,13 +387,16 @@
                               contentLabel.value = lbl || '';
 
                               if (idx && lbl) {
-                                    const canon = canonContentLabel(lbl);      // <<< НОВОЕ
-                                    const row = pricing.pricing[canon] || null;
-                                    unitPrice.value = row ? (row[idx - 1] || 0) : 0;
+                                    const pKey = pickPricingKey(lbl, Object.keys(pricing.pricing));
+                                    if (pKey) {
+                                          const row = pricing.pricing[pKey];
+                                          unitPrice.value = row ? (row[idx - 1] || 0) : 0;
+                                    } else {
+                                          unitPrice.value = 0;
+                                    }
                               } else {
                                     unitPrice.value = 0;
                               }
-
                               updatePriceUI();
                         }
 
