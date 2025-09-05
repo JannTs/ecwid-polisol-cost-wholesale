@@ -194,6 +194,32 @@
             return label.replace(/[«»"]/g, '').trim();
       }
 
+      // === Канонизация лейбла "Вміст" к ключам таблицы прайса
+      function canonContentLabel(label) {
+            if (!label) return null;
+            const t = label.toLowerCase().replace(/[«»"]/g, '').trim();
+
+            // "Класичний" vs "Класічний" (и любые вариации "и/і/i")
+            if (/клас[иiі]ч/.test(t)) return 'Класичний';
+
+            if (/шипшин/.test(t)) return 'З шипшиною';
+            if (/журавлин/.test(t)) return 'З журавлиною';
+
+            // Матусине здоров'я (ловим и "матусин", и "матусине")
+            if (/матусин|матусине/.test(t)) return "Матусине здоров'я";
+
+            if (/чоловіч/.test(t)) return 'Чоловіча сила';
+
+            // Квасы
+            if (/білий/.test(t)) return 'Квас трипільський (білий)';
+            if (/коріандр/.test(t)) return 'Квас трипільський з коріандром';
+            if (/квас/.test(t)) return 'Квас трипільський';
+
+            // fallback — вернём очищенный исходник
+            return label.replace(/[«»"]/g, '').trim();
+      }
+
+
       function saveLock(st) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(st)); } catch { } }
       function loadLock() { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || 'null'); } catch { return null; } }
       function clearLock() { try { localStorage.removeItem(LOCK_KEY); } catch { } }
@@ -262,14 +288,23 @@
                         function updatePriceUI() {
                               const { span, box } = priceEls();
                               if (!span) return;
+
                               if (!originalPriceText.value) originalPriceText.value = span.textContent;
-                              if (unitPrice.value) {
-                                    span.textContent = formatUAH(unitPrice.value);
-                                    if (box) box.setAttribute('content', String(unitPrice.value));
-                              } else if (originalPriceText.value) {
-                                    span.textContent = originalPriceText.value;
+
+                              const nextText = unitPrice.value
+                                    ? formatUAH(unitPrice.value)
+                                    : originalPriceText.value;
+
+                              // если текст тот же — не трогаем DOM
+                              if (span.textContent === nextText) return;
+
+                              span.textContent = nextText;
+                              if (box) {
+                                    const numeric = unitPrice.value ? String(unitPrice.value) : '';
+                                    box.setAttribute('content', numeric);
                               }
                         }
+
 
                         async function refreshUnitPrice() {
                               const bCount = readBatchCount();
@@ -288,7 +323,7 @@
                               contentLabel.value = lbl || '';
 
                               if (idx && lbl) {
-                                    const canon = lbl.replace(/[«»"]/g, '').trim();
+                                    const canon = canonContentLabel(lbl);      // <<< НОВОЕ
                                     const row = pricing.pricing[canon] || null;
                                     unitPrice.value = row ? (row[idx - 1] || 0) : 0;
                               } else {
