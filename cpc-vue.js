@@ -79,12 +79,48 @@
       }
 
       function readBatchCount() {
-            const inp = findBatchInput(); if (!inp) return null;
-            const fc = inp.closest('.form-control');
-            const txt = fc?.querySelector('.form-control__select-text')?.textContent?.trim() || inp.value || '';
-            const m = txt.match(/\d+/);
-            return m ? parseInt(m[0], 10) : null;
+            const fc = findBatchControl();
+            if (!fc) return null;
+
+            // 0) Если есть настоящий <select>, читаем выбранную опцию.
+            const sel = fc.querySelector('select.form-control__select');
+            if (sel) {
+                  const idx = sel.selectedIndex ?? -1;
+                  // индекс 0 — "Виберіть" (плейсхолдер) => ещё не выбрано
+                  if (idx > 0) {
+                        const txt = sel.options[idx]?.textContent?.trim() || "";
+                        const m = txt.match(/\b(15|30|45|60|75)\b/);
+                        if (m) return parseInt(m[0], 10);
+                  } else {
+                        return null; // ещё не выбрано
+                  }
+            }
+
+            // 1) Классический вариант Ecwid (когда рендерят псевдо-select)
+            const txtA =
+                  fc.querySelector(".form-control__select-text")?.textContent?.trim() || "";
+            const mA = txtA.match(/\b(15|30|45|60|75)\b/);
+            if (mA) return parseInt(mA[0], 10);
+
+            // 2) Иногда кладут значение в input.value
+            const inp = fc.querySelector("input[aria-label], input.form-control__text");
+            const txtB = (inp?.value || "").trim();
+            const mB = txtB.match(/\b(15|30|45|60|75)\b/);
+            if (mB) return parseInt(mB[0], 10);
+
+            // 3) Fallback по innerText — НО только если реально есть выбранное состояние.
+            // Здесь осторожно: innerText содержит ВСЕ опции. Поэтому проверяем,
+            // что placeholder НЕ активен (например, исчез "Виберіть" или есть класс "form-control--empty" = false).
+            const isEmpty = fc.classList.contains("form-control--empty");
+            if (!isEmpty) {
+                  const txtC = (fc.innerText || "").trim();
+                  const mC = txtC.match(/\b(15|30|45|60|75)\b/);
+                  if (mC) return parseInt(mC[0], 10);
+            }
+
+            return null;
       }
+
 
       function batchCountToIndex(n) { return (n === 15 ? 1 : n === 30 ? 2 : n === 45 ? 3 : n === 60 ? 4 : n === 75 ? 5 : null); }
       function indexToBatchCount(idx) { return ({ 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 })[idx] || null; }
