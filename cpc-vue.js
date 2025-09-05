@@ -1,15 +1,13 @@
 (function () {
       // === Endpoints ===
-      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; // при необходимости замени на свой домен Vercel
+      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; // при необходимости замени
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
 
       // === Константы ===
-      const LOCK_KEY = 'polisol_batch_lock'; // localStorage
-      const FAMILY_PREFIX = 'ПОЛІСОЛ-';           // таргет по SKU
-      const TOOLTIP_TEXT = 'Партію зафіксовано. Щоб змінити, очистіть кошик і оберіть знову.';
+      const FAMILY_PREFIX = 'ПОЛІСОЛ-'; // таргет по SKU
 
-      // Имя радио-группы может отличаться; ищем гибко
+      // Кандидаты имён радио-группы «Вміст»
       const RADIO_NAME_CANDIDATES = ['Вміст', 'Вмiст', 'Вміст ', 'вміст', 'content', 'состав'];
 
       // Подпись для дропдауна партии — ищем гибко
@@ -56,14 +54,12 @@
             return sku.startsWith(FAMILY_PREFIX);
       }
 
-      // Найти сам input (aria-label) для блока партии — удобно для поиска .form-control
+      // Найти input (aria-label) для блока партии
       function findBatchInput() {
-            // 1) точное совпадение aria-label
             for (const label of BATCH_ARIA_CANDS) {
                   const el = document.querySelector(`input[aria-label="${label}"]`);
                   if (el) return el;
             }
-            // 2) частичное совпадение (contains) по aria-label
             const allInputs = qsAll('input[aria-label]');
             const el2 = allInputs.find(i => {
                   const v = (i.getAttribute('aria-label') || '').toLowerCase();
@@ -71,7 +67,6 @@
             });
             if (el2) return el2;
 
-            // 3) любой readonly input рядом с .form-control__select-text, содержащей 15/30/45/60/75
             const candidates = qsAll('.form-control input[readonly], .form-control input[tabindex="-1"]');
             for (const inp of candidates) {
                   const txt = inp.closest('.form-control')?.querySelector('.form-control__select-text')?.textContent?.trim() || '';
@@ -80,20 +75,16 @@
             return null;
       }
 
-      // === ВАЖНО: сначала объявляем findBatchControl, потом readBatchCount ===
+      // === Сначала findBatchControl, затем readBatchCount ===
       function findBatchControl() {
-            // 1) по aria-label → ближайшая .form-control
             const aria = findBatchInput();
             if (aria) return aria.closest('.form-control') || null;
 
-            // 2) .form-control__select-text с цифрами партии
             const controls = qsAll('.form-control');
             for (const fc of controls) {
                   const txt = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
                   if (/\b(15|30|45|60|75)\b/.test(txt)) return fc;
             }
-
-            // 3) fallback: по innerText всего блока
             for (const fc of controls) {
                   const txt = (fc.innerText || '').trim();
                   if (/\b(15|30|45|60|75)\b/.test(txt)) return fc;
@@ -105,7 +96,7 @@
             const fc = findBatchControl();
             if (!fc) return null;
 
-            // 0) Нативный <select>: читаем выбранную опцию
+            // Нативный <select>
             const sel = fc.querySelector('select.form-control__select');
             if (sel) {
                   const idx = sel.selectedIndex ?? -1; // 0 — placeholder "Виберіть"
@@ -114,29 +105,26 @@
                         const m = txt.match(/\b(15|30|45|60|75)\b/);
                         if (m) return parseInt(m[0], 10);
                   } else {
-                        return null; // ещё не выбрано
+                        return null;
                   }
             }
 
-            // 1) Псевдо-select Ecwid
+            // Псевдо-select Ecwid
             const txtA = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
             const mA = txtA.match(/\b(15|30|45|60|75)\b/);
             if (mA) return parseInt(mA[0], 10);
 
-            // 2) Иногда кладут в input.value
             const inp = fc.querySelector('input[aria-label], input.form-control__text');
             const txtB = (inp?.value || '').trim();
             const mB = txtB.match(/\b(15|30|45|60|75)\b/);
             if (mB) return parseInt(mB[0], 10);
 
-            // 3) Осторожный fallback по innerText — только если блок уже не «пустой»
             const isEmpty = fc.classList.contains('form-control--empty');
             if (!isEmpty) {
                   const txtC = (fc.innerText || '').trim();
                   const mC = txtC.match(/\b(15|30|45|60|75)\b/);
                   if (mC) return parseInt(mC[0], 10);
             }
-
             return null;
       }
 
@@ -167,12 +155,10 @@
       }
 
       function getRadioList() {
-            // 1) по точному имени
             for (const nm of RADIO_NAME_CANDIDATES) {
                   const els = qsAll(`input.form-control__radio[name="${nm}"]`);
                   if (els.length) return els;
             }
-            // 2) имя содержит
             const allRadios = qsAll('input.form-control__radio[name], input[type="radio"][name]');
             const subset = allRadios.filter(r => {
                   const n = (r.getAttribute('name') || '').toLowerCase();
@@ -180,7 +166,6 @@
             });
             if (subset.length) return subset;
 
-            // 3) «всё что внутри блока опций»
             const inBlock = qsAll('.product-details__size-item-container input[type="radio"]');
             if (inBlock.length) return inBlock;
 
@@ -194,73 +179,64 @@
             return label.replace(/[«»"]/g, '').trim();
       }
 
-      // === Канонизация лейбла "Вміст" к ключам таблицы прайса
-      function canonContentLabel(label) {
-            if (!label) return null;
-            const t = label.toLowerCase().replace(/[«»"]/g, '').trim();
-
-            // "Класичний" vs "Класічний" (и любые вариации "и/і/i")
-            if (/клас[иiі]ч/.test(t)) return 'Класичний';
-
-            if (/шипшин/.test(t)) return 'З шипшиною';
-            if (/журавлин/.test(t)) return 'З журавлиною';
-
-            // Матусине здоров'я (ловим и "матусин", и "матусине")
-            if (/матусин|матусине/.test(t)) return "Матусине здоров'я";
-
-            if (/чоловіч/.test(t)) return 'Чоловіча сила';
-
-            // Квасы
-            if (/білий/.test(t)) return 'Квас трипільський (білий)';
-            if (/коріандр/.test(t)) return 'Квас трипільський з коріандром';
-            if (/квас/.test(t)) return 'Квас трипільський';
-
-            // fallback — вернём очищенный исходник
-            return label.replace(/[«»"]/g, '').trim();
+      // Нормализация и подбор ключа прайса
+      function norm(s) {
+            return (s || '')
+                  .toLowerCase()
+                  .replace(/[«»"'`]/g, '')
+                  .replace(/\u2019/g, "'")
+                  .replace(/\s+/g, ' ')
+                  .trim();
       }
+      function pickPricingKey(label, pricingKeys) {
+            const want = norm(label);
+            const keysNorm = pricingKeys.map(k => ({ raw: k, n: norm(k) }));
 
+            const has = (t) => want.includes(t);
 
-      function saveLock(st) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(st)); } catch { } }
-      function loadLock() { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || 'null'); } catch { return null; } }
-      function clearLock() { try { localStorage.removeItem(LOCK_KEY); } catch { } }
-
-      // === Стили
-      (function ensureCpcStyles() {
-            if (document.getElementById('cpc-base-style')) return;
-            const st = document.createElement('style');
-            st.id = 'cpc-base-style';
-            st.textContent = `
-      .cpc-disabled-lite{opacity:.6;}
-      .cpc-overlay{position:absolute;inset:0;cursor:not-allowed;background:transparent;}
-    `;
-            document.head.appendChild(st);
-      })();
-
-      // === Блокировка дропдауна (overlay + tooltip)
-      function lockBatchSelectUI() {
-            const sel = findBatchInput();
-            const fc = sel?.closest('.form-control');
-            if (!fc) return;
-            fc.classList.add('cpc-disabled-lite');
-            if (getComputedStyle(fc).position === 'static') fc.style.position = 'relative';
-            let ov = fc.querySelector('.cpc-overlay');
-            if (!ov) {
-                  ov = document.createElement('div');
-                  ov.className = 'cpc-overlay';
-                  fc.appendChild(ov);
+            if (has('білий') && (has('квас') || has('трип'))) {
+                  const hit = keysNorm.find(k => k.n.includes('білий'));
+                  if (hit) return hit.raw;
             }
-            ov.setAttribute('title', TOOLTIP_TEXT);
-      }
-      function unlockBatchSelectUI() {
-            const sel = findBatchInput();
-            const fc = sel?.closest('.form-control');
-            if (!fc) return;
-            fc.classList.remove('cpc-disabled-lite');
-            const ov = fc.querySelector('.cpc-overlay');
-            if (ov) ov.remove();
+            if (has('коріандр')) {
+                  const hit = keysNorm.find(k => k.n.includes('коріандр'));
+                  if (hit) return hit.raw;
+            }
+            if (has('квас') || has('трип')) {
+                  const hit = keysNorm.find(k => k.n.includes('квас') && !k.n.includes('білий') && !k.n.includes('коріандр'));
+                  if (hit) return hit.raw;
+            }
+            if (has('шипшин')) {
+                  const hit = keysNorm.find(k => k.n.includes('шипшин'));
+                  if (hit) return hit.raw;
+            }
+            if (has('журавлин')) {
+                  const hit = keysNorm.find(k => k.n.includes('журавлин'));
+                  if (hit) return hit.raw;
+            }
+            if (has('матус')) {
+                  const hit = keysNorm.find(k => k.n.includes('матус'));
+                  if (hit) return hit.raw;
+            }
+            if (has('чоловіч')) {
+                  const hit = keysNorm.find(k => k.n.includes('чоловіч'));
+                  if (hit) return hit.raw;
+            }
+            if (has('класич')) {
+                  const hit = keysNorm.find(k => k.n.includes('класич'));
+                  if (hit) return hit.raw;
+            }
+
+            const eq = keysNorm.find(k => k.n === want);
+            if (eq) return eq.raw;
+
+            const sub = keysNorm.find(k => k.n.includes(want) || want.includes(k.n));
+            if (sub) return sub.raw;
+
+            return null;
       }
 
-      // === Vue-приложение
+      // === Vue-приложение (без «блокировок» dropdown)
       function mountApp(pricing) {
             const { createApp, ref, computed, onMounted } = Vue;
 
@@ -277,7 +253,6 @@
             const app = createApp({
                   setup() {
                         const originalPriceText = ref(null);
-                        const locked = ref(false);
                         const batchIndex = ref(null);  // 1..5
                         const unitPrice = ref(0);
                         const contentLabel = ref('');
@@ -295,8 +270,7 @@
                                     ? formatUAH(unitPrice.value)
                                     : originalPriceText.value;
 
-                              // если текст тот же — не трогаем DOM
-                              if (span.textContent === nextText) return;
+                              if (span.textContent === nextText) return; // анти-мигание
 
                               span.textContent = nextText;
                               if (box) {
@@ -304,82 +278,10 @@
                                     box.setAttribute('content', numeric);
                               }
                         }
-                        //==========
-                        function norm(s) {
-                              return (s || '')
-                                    .toLowerCase()
-                                    .replace(/[«»"'`]/g, '')      // убираем кавычки
-                                    .replace(/\u2019/g, "'")      // типографский апостроф -> обычный
-                                    .replace(/\s+/g, ' ')
-                                    .trim();
-                        }
 
-                        function pickPricingKey(label, pricingKeys) {
-                              const want = norm(label);
-                              const keysNorm = pricingKeys.map(k => ({ raw: k, n: norm(k) }));
-
-                              // 1) Сильные маркеры содержимого
-                              const has = (t) => want.includes(t);
-
-                              if (has('білий') && (has('квас') || has('трип'))) {
-                                    const hit = keysNorm.find(k => k.n.includes('білий'));
-                                    if (hit) return hit.raw;
-                              }
-                              if (has('коріандр')) {
-                                    const hit = keysNorm.find(k => k.n.includes('коріандр'));
-                                    if (hit) return hit.raw;
-                              }
-                              if (has('квас') || has('трип')) {
-                                    const hit = keysNorm.find(k => k.n.includes('квас') && !k.n.includes('білий') && !k.n.includes('коріандр'));
-                                    if (hit) return hit.raw;
-                              }
-
-                              if (has('шипшин')) {
-                                    const hit = keysNorm.find(k => k.n.includes('шипшин'));
-                                    if (hit) return hit.raw; // → "З шипшиною"
-                              }
-                              if (has('журавлин')) {
-                                    const hit = keysNorm.find(k => k.n.includes('журавлин'));
-                                    if (hit) return hit.raw; // → "З журавлиною"
-                              }
-                              if (has('матус')) {
-                                    const hit = keysNorm.find(k => k.n.includes('матус'));
-                                    if (hit) return hit.raw; // → "Матусине здоров'я"
-                              }
-                              if (has('чоловіч')) {
-                                    const hit = keysNorm.find(k => k.n.includes('чоловіч'));
-                                    if (hit) return hit.raw; // → "Чоловіча сила"
-                              }
-                              if (has('класич')) {
-                                    const hit = keysNorm.find(k => k.n.includes('класич'));
-                                    if (hit) return hit.raw; // → "Класичний"
-                              }
-
-                              // 2) Ровное совпадение после нормализации
-                              {
-                                    const eq = keysNorm.find(k => k.n === want);
-                                    if (eq) return eq.raw;
-                              }
-                              // 3) Подстрока
-                              {
-                                    const sub = keysNorm.find(k => k.n.includes(want) || want.includes(k.n));
-                                    if (sub) return sub.raw;
-                              }
-
-                              return null; // не нашли (лучше явно провалиться в 0)
-                        }
-
-                        //===========
                         async function refreshUnitPrice() {
                               const bCount = readBatchCount();
                               const idx = bCount ? batchCountToIndex(bCount) : null;
-
-                              // авто-фиксация при первом выборе партии
-                              if (idx && !locked.value) {
-                                    locked.value = true;
-                                    saveLock({ locked: true, batchIndex: idx });
-                                    lockBatchSelectUI();
-                              }
 
                               batchIndex.value = idx;
 
@@ -397,16 +299,8 @@
                               } else {
                                     unitPrice.value = 0;
                               }
-                              updatePriceUI();
-                        }
 
-                        function applyLockFromState() {
-                              const st = loadLock();
-                              if (st && st.locked && st.batchIndex) {
-                                    locked.value = true;
-                                    batchIndex.value = st.batchIndex;
-                                    lockBatchSelectUI();
-                              }
+                              updatePriceUI();
                         }
 
                         function renderCartTable(items) { cartItems.value = items; }
@@ -448,7 +342,7 @@
                                     const qtyInp = findQtyInput();
                                     const qty = Math.max(1, parseInt((qtyInp?.value || '1'), 10) || 1);
 
-                                    // лимит по сумме партии
+                                    // лимит по сумме партии (для текущего суффикса партии)
                                     Ecwid.Cart.get(async function (cart) {
                                           const batchMax = indexToBatchCount(idx);
                                           const current = (cart.items || []).filter(it => skuMatchesOurBatch(it.sku, idx))
@@ -459,7 +353,7 @@
                                           }
 
                                           try {
-                                                const payload = { contentLabel: lbl, batchIndex: idx }; // суффикс сервер определит сам
+                                                const payload = { contentLabel: lbl, batchIndex: idx }; // суффикс варианта сервер определит сам
                                                 const r = await fetch(QUOTE_ENDPOINT, {
                                                       method: 'POST',
                                                       headers: { 'Content-Type': 'application/json' },
@@ -480,7 +374,6 @@
                               window.__cpc_add_hooked = true;
                         }
 
-                        // Обновления при изменении опций
                         function observeOptionChanges() {
                               const root =
                                     document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') ||
@@ -495,7 +388,6 @@
                         }
 
                         onMounted(() => {
-                              applyLockFromState();
                               refreshUnitPrice();
                               attachAddToCartInterceptor();
                               observeOptionChanges();
@@ -551,15 +443,12 @@
                   Ecwid.OnPageLoaded.add(async page => {
                         if (page.type !== 'PRODUCT') return;
 
-                        // уход/не наш товар — мягкий teardown
                         if (!isTargetProduct()) {
                               const host = document.getElementById('cpc-polisol-summary');
                               if (host) host.remove();
-                              unlockBatchSelectUI();
                               return;
                         }
 
-                        // анти-дубль по productId
                         if (window.__cpc_vue_pid === page.productId) return;
                         window.__cpc_vue_pid = page.productId;
 
@@ -574,5 +463,4 @@
                   });
             });
       });
-
 })();
