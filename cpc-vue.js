@@ -1,14 +1,15 @@
-/* POLISOL widget v2025-09-06-17  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-17)
-   Изменения относительно v16:
-   - /api/polisol/quote теперь в первую очередь получает { contentLabel: canon, batchIndex }
-     (это соответствует сообщению сервера "Missing or invalid contentLabel/contentKey or batchIndex").
-   - Улучшены логи ошибок quote (видно и статус, и текст).
-   - Таймаут failsafe для Ecwid.Cart.addProduct увеличен до 6000 мс (меньше ложных timeout в консоли).
-   - Логика партий остаётся: фиксируем ТОЛЬКО размер партии; смешивать «Вміст» можно, но суммарно ≤ лимита партии.
+/* POLISOL widget v2025-09-06-18  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-18)
+   Новое:
+   - Компонент "Підсумок кошика POLISOL" перед #productDescription:
+       | № | ПОЛІСОЛ™«{Вміст}» (ціна в партії N) | {X банок} | {ціна} | {сума} |
+       + итого "Сума разом"
+   - Динамическое обновление при добавлении/удалении/изменении qty (Ecwid.OnCartChanged).
+   - Показ только для семейства ПОЛІСОЛ- и только на карточке товара.
+   Остальное: фиксация ТОЛЬКО размера партії, смешивание “Вмістів” разрешено до лимита; quote через contentLabel.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-17 ready');
+      console.info('POLISOL widget v2025-09-06-18 ready');
 
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -29,7 +30,9 @@
             cartBound: false,
             adding: false,
             currentSku: null,
-            isTargetMemo: null
+            isTargetMemo: null,
+            cssInjected: false,
+            summaryBound: false
       });
 
       // === Lock (фиксируем ТОЛЬКО размер партии) ===
@@ -39,9 +42,7 @@
       function clearLock() { try { sessionStorage.removeItem(LOCK_KEY); } catch (_) { } }
 
       // === Ecwid helpers ===
-      function waitEcwid(cb) {
-            (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100);
-      }
+      function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
       function fetchCart() {
             return new Promise((resolve) => {
                   try { Ecwid.Cart.get((cart) => resolve(cart || { items: [] })); }
@@ -143,7 +144,7 @@
       function batchCountToIndex(n) { return (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null))))); }
       function batchLimitByIndex(idx) { return (idx === 1 ? 15 : (idx === 2 ? 30 : (idx === 3 ? 45 : (idx === 4 ? 60 : (idx === 5 ? 75 : null))))); }
 
-      // === "Вміст" ===
+      // === "Вміст" helpers ===
       function canonContent(label) {
             const t = normalizeKey(label);
             if (!t) return null;
@@ -169,6 +170,10 @@
                   case 'Квас трипільський з коріандром': return 'kvas_koriandr';
                   default: return null;
             }
+      }
+      function inferCanonFromName(name) {
+            // попытка вытащить канон из названия товара в корзине
+            return canonContent(name) || name;
       }
       function getCheckedContent() {
             const radios = Array.from(document.querySelectorAll('input.form-control__radio'));
@@ -264,96 +269,211 @@
             return { ok: false, error: lastErr };
       }
 
+      // === CART SUMMARY WIDGET ===
+      function ensureSummaryStyles() {
+            if (__cpc.cssInjected) return;
+            const css = `
+#polisol-cart-summary { margin: 16px 0 8px; border: 1px solid #eee; border-radius: 12px; overflow: hidden; }
+#polisol-cart-summary .pcs-head { padding: 10px 14px; font-weight: 600; background: #fafafa; }
+#polisol-cart-summary table { width: 100%; border-collapse: collapse; }
+#polisol-cart-summary th, #polisol-cart-summary td { padding: 10px 12px; border-top: 1px solid #eee; text-align: left; vertical-align: middle; }
+#polisol-cart-summary th:nth-child(1), #polisol-cart-summary td:nth-child(1) { width: 44px; text-align: center; }
+#polisol-cart-summary td.pcs-right, #polisol-cart-summary th.pcs-right { text-align: right; white-space: nowrap; }
+#polisol-cart-summary .pcs-muted { color: #777; font-weight: 400; }
+#polisol-cart-summary .pcs-total td { font-weight: 700; border-top: 2px solid #ddd; }
+#polisol-cart-summary .pcs-empty { padding: 10px 14px; color: #777; }
+    `.trim();
+            const style = document.createElement('style');
+            style.id = 'polisol-cart-summary-style';
+            style.textContent = css;
+            document.head.appendChild(style);
+            __cpc.cssInjected = true;
+      }
+
+      function ensureSummaryContainer() {
+            let host = document.getElementById('polisol-cart-summary');
+            if (host) return host;
+
+            ensureSummaryStyles();
+
+            host = document.createElement('div');
+            host.id = 'polisol-cart-summary';
+            host.innerHTML = `
+      <div class="pcs-head">Підсумок кошика POLISOL</div>
+      <div class="pcs-body pcs-empty">Кошик порожній для цієї партії.</div>
+    `;
+
+            // вставляем перед описанием товара
+            const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
+            if (descr && descr.parentNode) {
+                  descr.parentNode.insertBefore(host, descr);
+            } else {
+                  // запасной вариант — в начало карточки
+                  const container = document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body;
+                  container.insertBefore(host, container.firstChild);
+            }
+            return host;
+      }
+
+      function renderCartSummarySync(cart) {
+            const host = ensureSummaryContainer();
+            const items = (cart && cart.items) || [];
+            const fam = items.filter(it => itemSku(it).indexOf(FAMILY_PREFIX) === 0);
+
+            const lock = getLock();
+            const limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
+
+            if (!fam.length) {
+                  host.querySelector('.pcs-body').outerHTML = `<div class="pcs-body pcs-empty">Кошик порожній для POLISOL.</div>`;
+                  return;
+            }
+
+            let rows = '';
+            let total = 0;
+            fam.forEach((it, i) => {
+                  const idx = i + 1;
+                  const canon = inferCanonFromName(it.name || '');
+                  const label = `ПОЛІСОЛ™«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
+                  const qty = Number(it.quantity || 0);
+                  const unit = Number(it.price || 0);
+                  const sum = unit * qty;
+                  total += sum;
+                  rows += `
+        <tr>
+          <td class="pcs-center">${idx}</td>
+          <td>${label}</td>
+          <td class="pcs-right">${qty} банок</td>
+          <td class="pcs-right">${formatUAH(unit)}</td>
+          <td class="pcs-right">${formatUAH(sum)}</td>
+        </tr>
+      `;
+            });
+
+            const table = `
+      <div class="pcs-body">
+        <table>
+          <thead>
+            <tr>
+              <th>№</th>
+              <th>Найменування</th>
+              <th class="pcs-right">Кількість</th>
+              <th class="pcs-right">Ціна</th>
+              <th class="pcs-right">Сума</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr class="pcs-total">
+              <td></td>
+              <td>Сума разом</td>
+              <td></td>
+              <td></td>
+              <td class="pcs-right">${formatUAH(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    `;
+            host.querySelector('.pcs-body').outerHTML = table;
+      }
+
+      async function renderCartSummary() {
+            try { const cart = await fetchCart(); renderCartSummarySync(cart); }
+            catch (_) { /* noop */ }
+      }
+
       // === Add to Cart interception ===
       function findQtyInput() {
             return document.querySelector('.details-product-purchase__qty input[type="number"]')
                   || document.querySelector('input[type="number"][name="quantity"]');
       }
 
-      function attachAddToCart() {
-            if (window.__cpc_add_bound) return;
+      async function handleAddToBagClick(e) {
+            const tgt = e.target;
+            if (!(tgt instanceof Element)) return;
+            const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button');
+            if (!btn) return;
+            if (!isTargetProduct()) return; // до preventDefault
 
-            document.addEventListener('click', async (e) => {
-                  const tgt = e.target;
-                  if (!(tgt instanceof Element)) return;
-                  const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button');
-                  if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
 
-                  if (!isTargetProduct()) return; // до preventDefault
-                  e.preventDefault();
-                  e.stopPropagation();
+            if (__cpc.adding) return;
+            __cpc.adding = true;
 
-                  if (__cpc.adding) return;
-                  __cpc.adding = true;
+            let preLocked = false; // ставили ли lock в этом клике
 
-                  let preLocked = false; // ставили ли lock в этом клике
+            try {
+                  const { idx, canon } = refreshUnitPrice();
+                  if (!idx) { alert('Оберіть розмір партії.'); return; }
+                  if (!canon) { alert('Оберіть «Вміст».'); return; }
 
-                  try {
-                        const { idx, canon } = refreshUnitPrice();
-                        if (!idx) { alert('Оберіть розмір партії.'); return; }
-                        if (!canon) { alert('Оберіть «Вміст».'); return; }
+                  const contentKey = contentKeyForCanon(canon);
+                  if (!contentKey) { alert('Невідомий «Вміст» (contentKey).'); return; }
 
-                        const contentKey = contentKeyForCanon(canon);
-                        if (!contentKey) { alert('Невідомий «Вміст» (contentKey).'); return; }
+                  const qty = Math.max(1, parseInt((findQtyInput()?.value || '1'), 10) || 1);
 
-                        const qty = Math.max(1, parseInt((findQtyInput()?.value || '1'), 10) || 1);
+                  // Текущее состояние корзины + lock
+                  const cart = await fetchCart();
+                  const hasFam = cartHasFamily(cart.items);
+                  let lock = getLock();
 
-                        // Текущее состояние корзины + lock
-                        const cart = await fetchCart();
-                        const hasFam = cartHasFamily(cart.items);
-                        let lock = getLock();
+                  // Наследие без lock — блок
+                  if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
 
-                        // Наследие без lock — блок
-                        if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
-
-                        // Проверка/установка лока по партии
-                        if (lock) {
-                              if (String(lock.batchIndex) !== String(idx)) {
-                                    const lim = batchLimitByIndex(lock.batchIndex);
-                                    alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.');
-                                    return;
-                              }
-                        } else {
-                              setLock({ batchIndex: idx });
-                              preLocked = true;
-                              lock = getLock();
-                        }
-
-                        // Контроль лимита партии
-                        const limit = batchLimitByIndex(lock.batchIndex);
-                        const currentQty = sumFamilyQty(cart.items);
-                        const remaining = limit - currentQty;
-
-                        if (remaining <= 0) { alert('Досягнуто ліміт партії (' + limit + ' шт.).'); return; }
-                        if (qty > remaining) { alert('Можна додати не більше ' + remaining + ' шт. (ліміт ' + limit + ').'); return; }
-
-                        // Получаем productId (contentLabel сначала)
-                        const quo = await requestQuote({ contentKey, canon, idx });
-                        if (!quo.ok) {
-                              const err = quo.error || {};
-                              const status = (err.status != null ? 'HTTP ' + err.status + ' ' : '');
-                              const detail = (typeof err.msg === 'string' ? err.msg : (err.msg == null ? '' : String(err.msg)));
-                              alert('Помилка серверу: ' + status + (detail || 'невідома помилка'));
+                  // Проверка/установка лока по партии
+                  if (lock) {
+                        if (String(lock.batchIndex) !== String(idx)) {
+                              const lim = batchLimitByIndex(lock.batchIndex);
+                              alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.');
                               return;
                         }
-
-                        // Добавление + FAILSAFE 6s
-                        const result = await Promise.race([
-                              new Promise((resolve) => {
-                                    try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, function () { resolve('cb'); }); }
-                                    catch (_) { resolve('catch'); }
-                              }),
-                              new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000))
-                        ]);
-                        if (result === 'timeout') console.warn('[POLISOL] addProduct callback timeout');
-                  } catch (err) {
-                        if (preLocked) clearLock();
-                        alert('Помилка серверу: ' + (err?.message || err));
-                  } finally {
-                        __cpc.adding = false;
+                  } else {
+                        setLock({ batchIndex: idx });
+                        preLocked = true;
+                        lock = getLock();
                   }
-            }, true);
 
+                  // Контроль лимита партии
+                  const limit = batchLimitByIndex(lock.batchIndex);
+                  const currentQty = sumFamilyQty(cart.items);
+                  const remaining = limit - currentQty;
+                  if (remaining <= 0) { alert('Досягнуто ліміт партії (' + limit + ' шт.).'); return; }
+                  if (qty > remaining) { alert('Можна додати не більше ' + remaining + ' шт. (ліміт ' + limit + ').'); return; }
+
+                  // Получаем productId (contentLabel сначала)
+                  const quo = await requestQuote({ contentKey, canon, idx });
+                  if (!quo.ok) {
+                        const err = quo.error || {};
+                        const status = (err.status != null ? 'HTTP ' + err.status + ' ' : '');
+                        const detail = (typeof err.msg === 'string' ? err.msg : (err.msg == null ? '' : String(err.msg)));
+                        alert('Помилка серверу: ' + status + (detail || 'невідома помилка'));
+                        return;
+                  }
+
+                  // Добавление + FAILSAFE 6s
+                  const result = await Promise.race([
+                        new Promise((resolve) => {
+                              try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, function () { resolve('cb'); }); }
+                              catch (_) { resolve('catch'); }
+                        }),
+                        new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000))
+                  ]);
+                  if (result === 'timeout') console.warn('[POLISOL] addProduct callback timeout');
+
+                  // Обновим мини-таблицу
+                  await renderCartSummary();
+            } catch (err) {
+                  if (preLocked) clearLock();
+                  alert('Помилка серверу: ' + (err?.message || err));
+            } finally {
+                  __cpc.adding = false;
+            }
+      }
+
+      function attachAddToCart() {
+            if (window.__cpc_add_bound) return;
+            document.addEventListener('click', handleAddToBagClick, true);
             window.__cpc_add_bound = true;
       }
 
@@ -379,9 +499,11 @@
             const mo = new MutationObserver(() => {
                   if (__cpc.moScheduled) return;
                   __cpc.moScheduled = true;
-                  requestAnimationFrame(() => {
+                  requestAnimationFrame(async () => {
                         __cpc.moScheduled = false;
                         refreshUnitPrice();
+                        // небольшое обновление таблицы, если корзина менялась в другом месте
+                        await renderCartSummary();
                   });
             });
             mo.observe(root, { childList: true, subtree: true });
@@ -393,6 +515,8 @@
             Ecwid.OnCartChanged.add((cart) => {
                   const items = (cart && cart.items) || [];
                   if (!cartHasFamily(items)) clearLock();
+                  // при любом изменении корзины — перерисовываем таблицу
+                  try { renderCartSummarySync({ items }); } catch (_) { }
             });
             __cpc.cartBound = true;
       }
@@ -426,10 +550,16 @@
                               pricingCache = null;
                         }
 
+                        // UI hooks
                         bindOptionChange();
                         observeDom();
                         bindCartGuard();
                         attachAddToCart();
+
+                        // Стартовый рендер мини-таблицы
+                        await renderCartSummary();
+
+                        // Цена
                         refreshUnitPrice();
                   });
             });
