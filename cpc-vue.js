@@ -37,6 +37,13 @@
             const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
             return `₴${grouped}.${d}`;
       }
+      function normalizeKey(s) {
+            return normApos(String(s))
+                  .replace(/[«»"]/g, '')
+                  .trim()
+                  .toLowerCase();
+      }
+
       function normApos(s) { return String(s || '').replace(/[\u2019\u02BC\u2032\u00B4]/g, "'"); }
 
       function canonContent(label) {
@@ -156,16 +163,20 @@
             const canon = rawLabel ? canonContent(rawLabel) : null;
 
             if (idx && canon) {
-                  const key = normApos(canon);
-                  const row =
-                        (pricingCache.__index && pricingCache.__index[key]) ||
-                        (pricingCache.pricing && pricingCache.pricing[canon]) ||
-                        null;
+                  const key = normalizeKey(canon);
+                  const row = (pricingCache.__index && pricingCache.__index[key]) || null;
+
                   if (!row) {
-                        console.warn('[POLISOL] price row not found for', canon, 'normalized=', key, 'available=', Object.keys(pricingCache.__index || {}));
+                        const warned = (__cpc.warned = __cpc.warned || new Set());
+                        if (!warned.has(key)) {
+                              console.warn('[POLISOL] price row not found for', canon, 'key=', key,
+                                    'available=', Object.keys(pricingCache.__index || {}));
+                              warned.add(key);
+                        }
                         setPriceUI(null);
                         return { idx, canon, price: null };
                   }
+
                   const price = row[idx - 1] || 0;
                   setPriceUI(price);
                   return { idx, canon, price };
@@ -258,6 +269,12 @@
 
                         try {
                               const res = await fetch(PRICING_ENDPOINT);
+                              const idxMap = {};
+                              for (const [k, row] of Object.entries(pr.pricing || {})) {
+                                    idxMap[normalizeKey(k)] = row;
+                              }
+                              pricingCache = { ...pr, __index: idxMap };
+
                               const pr = await res.json();
                               if (!pr?.ok) throw new Error('pricing not ok');
                               const idxMap = {};
