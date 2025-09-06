@@ -1,17 +1,16 @@
+/* POLISOL widget v2025-09-06-6 */
 (() => {
-      // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
 
-      // === Константы ===
       const FAMILY_PREFIX = 'ПОЛІСОЛ-';
       const RADIO_NAME_HINT = 'Вміст';
 
-      // === Ecwid boot ===
-      function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
+      function waitEcwid(cb) {
+            (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100);
+      }
 
-      // === Vue boot (если нет — догружаем) ===
       async function ensureVue() {
             if (window.Vue && Vue.createApp) return;
             await new Promise((resolve, reject) => {
@@ -22,7 +21,6 @@
             });
       }
 
-      // === DOM utils ===
       function getSku() {
             const sels = [
                   '[itemprop="sku"]', '.product-details__product-sku', '[data-product-sku]',
@@ -42,13 +40,11 @@
       function isTargetProduct() { const sku = getSku() || ''; return sku.startsWith(FAMILY_PREFIX); }
 
       function findBatchControl() {
-            // 1) по aria-label
             const cands = ['розмір партії (вплив на опт.ціни)', 'розмір партії', 'размер партии', 'партія', 'партия'];
             for (const label of cands) {
                   const el = document.querySelector(`input[aria-label="${label}"]`);
                   if (el) return el.closest('.form-control') || null;
             }
-            // 2) эвристика по тексту (внутри .form-control есть 15/30/45/60/75)
             const ctrls = Array.from(document.querySelectorAll('.form-control'));
             for (const fc of ctrls) {
                   const t = (fc.querySelector('.form-control__select-text')?.textContent || fc.innerText || '').trim();
@@ -102,11 +98,9 @@
       function formatUAH(n) {
             const s = Number(n).toFixed(2);
             const [i, d] = s.split('.');
-            const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F'); // узкий non-breaking space
+            const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
             return `₴${grouped}.${d}`;
       }
-
-      // === Канон для таблицы цен ===
       function canonLabel(lblRaw) {
             const t = (lblRaw || '').toLowerCase();
             if (/класич/i.test(t) || /класіч/i.test(t)) return 'Класичний';
@@ -128,8 +122,10 @@
             return idxs.length ? idxs[0] : null;
       }
 
-      // === Vue виджет ===
+      let pricingCache = null;
+
       function mountApp(pricing) {
+            pricingCache = pricing;
             const { createApp, ref, computed, onMounted } = Vue;
 
             let host = document.getElementById('cpc-polisol-summary');
@@ -146,7 +142,7 @@
                         const unitPrice = ref(0);
                         const cartItems = ref([]);
                         const batchIndex = ref(null);
-                        let lastSig = ''; // подпись состояния, чтобы лишний раз не перерисовывать
+                        let lastSig = '';
 
                         function updatePriceUI() {
                               const { span, box } = priceEls();
@@ -166,13 +162,13 @@
                               const canon = lbl ? canonLabel(lbl) : null;
 
                               const sig = `${idx || 0}|${canon || ''}`;
-                              if (sig === lastSig) return; // ничего не поменялось
+                              if (sig === lastSig) return;
                               lastSig = sig;
 
                               batchIndex.value = idx;
 
-                              if (idx && canon && pricing?.pricing?.[canon]) {
-                                    const row = pricing.pricing[canon];
+                              if (idx && canon && pricingCache?.pricing?.[canon]) {
+                                    const row = pricingCache.pricing[canon];
                                     unitPrice.value = row[idx - 1] || 0;
                               } else {
                                     unitPrice.value = 0;
@@ -198,26 +194,47 @@
                         function sumForItems(items) { return items.reduce((a, it) => a + it.sum, 0); }
                         const total = computed(() => formatUAH(sumForItems(cartItems.value)));
 
-                        // ——— КЛЮЧЕВОЕ: слушаем только change, без MutationObserver
+                        let refreshTimer = null;
+                        function scheduleRefresh() {
+                              if (refreshTimer) clearTimeout(refreshTimer);
+                              // чуть позже, чтобы Ecwid успел дорисовать DOM
+                              refreshTimer = setTimeout(() => { refreshUnitPrice(); }, 120);
+                        }
+
                         function wireOptionEvents() {
                               if (window.__cpc_change_wired) return;
 
+                              // 1) Прямые изменения <select> и радиокнопок
                               document.addEventListener('change', (e) => {
                                     const t = e.target;
                                     if (!t) return;
-                                    // дропдаун партии (select) или его прокси
-                                    if (t.matches && (t.matches('select[aria-label], select.form-control__select') ||
-                                          (t.matches('input[aria-label]') && /\b(парті|партии|розмір)\b/i.test(t.getAttribute('aria-label') || '')))) {
-                                          refreshUnitPrice();
+                                    if (t.matches && t.matches('select[aria-label], select.form-control__select')) {
+                                          scheduleRefresh();
                                           return;
                                     }
-                                    // радиокнопки «Вміст»
                                     if (t.matches && t.matches('input[type="radio"]')) {
-                                          // проверим, что это группа «Вміст» (по name/label)
                                           const name = (t.getAttribute('name') || '').toLowerCase();
-                                          if (/вміст/.test(name) || document.querySelector(`label[for="${t.id}"]`)?.textContent?.match(/Клас|Шипшин|Журавлин|Квас|Матусин|Чоловіч/i)) {
-                                                refreshUnitPrice();
-                                          }
+                                          if (/вміст/.test(name)) scheduleRefresh();
+                                    }
+                              }, true);
+
+                              // 2) Некоторые темы Ecwid кликают по label, а не по input — ловим клик и ищем for=
+                              document.addEventListener('click', (e) => {
+                                    const lbl = e.target.closest && e.target.closest('label[for]');
+                                    if (!lbl) return;
+                                    const id = lbl.getAttribute('for'); if (!id) return;
+                                    const inp = document.getElementById(id);
+                                    if (inp && inp.type === 'radio') {
+                                          const name = (inp.getAttribute('name') || '').toLowerCase();
+                                          if (/вміст/.test(name)) scheduleRefresh();
+                                    }
+                              }, true);
+
+                              // 3) На всякий случай — input-событие на select (некоторые сборки триггерят именно его)
+                              document.addEventListener('input', (e) => {
+                                    const t = e.target;
+                                    if (t && t.matches && t.matches('select[aria-label], select.form-control__select')) {
+                                          scheduleRefresh();
                                     }
                               }, true);
 
@@ -283,58 +300,59 @@
                         }
 
                         onMounted(() => {
-                              // начальный рассчёт
+                              // первый расчёт + «мягкая» серия перепроверок на старте
                               refreshUnitPrice();
-                              // события опций
+                              setTimeout(refreshUnitPrice, 150);
+                              setTimeout(refreshUnitPrice, 400);
+
                               wireOptionEvents();
-                              // корзина
+
                               fetchCartAndRender();
                               Ecwid.OnCartChanged.add(fetchCartAndRender);
-                              // перехват add-to-cart
+
                               attachAddToCartInterceptor();
                         });
 
-                        return { cartItems, total, formatUAH };
+                        return { cartItems, total: computed(() => formatUAH(sumForItems(cartItems.value))), formatUAH };
                   },
                   template: `
-      <div v-if="cartItems.length" style="margin-top:8px;border-top:1px solid rgba(0,0,0,.08);padding-top:8px">
-            <div style="font-weight:600;margin-bottom:6px">Ваш набір (для обраної партії)</div>
-            <div style="overflow:auto">
-                  <table style="width:100%;border-collapse:collapse;font-size:14px">
-                        <thead>
-                              <tr>
-                                    <th style="text-align:left;padding:4px 6px">№</th>
-                                    <th style="text-align:left;padding:4px 6px">Товар</th>
-                                    <th style="text-align:right;padding:4px 6px">К-сть</th>
-                                    <th style="text-align:right;padding:4px 6px">Ціна</th>
-                                    <th style="text-align:right;padding:4px 6px">Сума</th>
-                              </tr>
-                        </thead>
-                        <tbody>
-                              <tr v-for="it in cartItems" :key="it.n">
-                              <td style="padding:4px 6px">{{ it.n }}</td>
-                              <td style="padding:4px 6px">{{ it.name }}</td>
-                              <td style="padding:4px 6px;text-align:right">{{ it.quantity }}</td>
-                              <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.price) }}</td>
-                              <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.sum) }}</td>
-                        </tr>
-                  </tbody>
-                  <tfoot>
-                        <tr>
-                              <td colspan="4" style="padding:6px 6px;text-align:right;font-weight:600">Разом</td>
-                              <td style="padding:6px 6px;text-align:right;font-weight:600">{{ total }}</td>
-                        </tr>
-                  </tfoot>
+        <div v-if="cartItems.length" style="margin-top:8px;border-top:1px solid rgba(0,0,0,.08);padding-top:8px">
+          <div style="font-weight:600;margin-bottom:6px">Ваш набір (для обраної партії)</div>
+          <div style="overflow:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:14px">
+              <thead>
+                <tr>
+                  <th style="text-align:left;padding:4px 6px">№</th>
+                  <th style="text-align:left;padding:4px 6px">Товар</th>
+                  <th style="text-align:right;padding:4px 6px">К-сть</th>
+                  <th style="text-align:right;padding:4px 6px">Ціна</th>
+                  <th style="text-align:right;padding:4px 6px">Сума</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in cartItems" :key="it.n">
+                  <td style="padding:4px 6px">{{ it.n }}</td>
+                  <td style="padding:4px 6px">{{ it.name }}</td>
+                  <td style="padding:4px 6px;text-align:right">{{ it.quantity }}</td>
+                  <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.price) }}</td>
+                  <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.sum) }}</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="4" style="padding:6px 6px;text-align:right;font-weight:600">Разом</td>
+                  <td style="padding:6px 6px;text-align:right;font-weight:600">{{ total }}</td>
+                </tr>
+              </tfoot>
             </table>
-      </div>
-</div>
-`
+          </div>
+        </div>
+      `
             });
 
             app.mount('#cpc-polisol-summary');
       }
 
-      // === Bootstrap ===
       waitEcwid(() => {
             Ecwid.OnAPILoaded.add(() => {
                   Ecwid.OnPageLoaded.add(async (page) => {
@@ -351,5 +369,5 @@
                   });
             });
       });
-})();
 
+})();
