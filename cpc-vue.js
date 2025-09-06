@@ -1,16 +1,12 @@
-/* POLISOL widget v2025-09-06-13  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-13)
-   - Один MutationObserver + rAF-троттлинг
-   - Нормализация ключей прайсинга (регистронезависимо)
-   - Жёсткая защита от смешивания партий:
-       • lock {batchIndex, contentKey} в sessionStorage
-       • перед добавлением проверяем текущую корзину и lock
-       • lock ставим ПЕРЕД добавлением, только если корзина пуста по семейству
-       • при ошибке добавления снимаем lock только если ставили его в этом клике
-   - Защита от дабл-кликов при добавлении
+/* POLISOL widget v2025-09-06-14  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-14)
+   Правки:
+   - Стабильный SKU: запоминаем __cpc.currentSku на OnPageLoaded и используем его в isTargetProduct()
+   - Failsafe для Ecwid.Cart.addProduct: таймаут 4s, чтобы не зависал __cpc.adding
+   - Всё остальное как в v13: единичные обработчики, один MutationObserver + rAF, anti-mix lock
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-13 ready');
+      console.info('POLISOL widget v2025-09-06-14 ready');
 
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -29,7 +25,9 @@
             moScheduled: false,
             warned: new Set(),
             cartBound: false,
-            adding: false
+            adding: false,
+            currentSku: null,      // <-- новый мемоизированный SKU
+            isTargetMemo: null     // <-- кэш принадлежности семейству
       });
 
       // === Lock (anti-mix) ===
@@ -103,7 +101,20 @@
             }
             return null;
       }
-      function isTargetProduct() { const sku = getSku() || ''; return sku.indexOf(FAMILY_PREFIX) === 0; }
+      function isTargetProduct() {
+            // 1) Если у нас уже есть мемоизированный SKU со страницы — используем его
+            if (typeof __cpc.isTargetMemo === 'boolean') return __cpc.isTargetMemo;
+            const memo = __cpc.currentSku;
+            if (memo) {
+                  __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0;
+                  return __cpc.isTargetMemo;
+            }
+            // 2) Иначе пробуем добыть из DOM, а затем мемоизировать
+            const sku = getSku() || '';
+            if (sku) { __cpc.currentSku = sku; }
+            __cpc.isTargetMemo = sku.indexOf(FAMILY_PREFIX) === 0;
+            return __cpc.isTargetMemo;
+      }
 
       // === Batch ("Розмір партії") ===
       function extractAllowedNumber(str, allowed) {
@@ -239,6 +250,8 @@
                   if (!(tgt instanceof Element)) return;
                   const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button');
                   if (!btn) return;
+
+                  // ВАЖНО: проверяем target до preventDefault
                   if (!isTargetProduct()) return;
 
                   e.preventDefault();
@@ -265,26 +278,22 @@
                         let lock = getLock();
 
                         if (hasFam) {
-                              // В корзине уже есть семейство
-                              if (!lock) { // чужие позиции (другая вкладка/сессия)
+                              if (!lock) {
                                     alert('У кошику вже є товар POLISOL. Щоб уникнути змішування партій, спочатку оформіть поточну партію або очистьте кошик.');
                                     return;
                               }
-                              // Есть lock — он должен совпадать с текущим выбором
                               if (String(lock.batchIndex) !== String(idx) || String(lock.contentKey) !== String(contentKey)) {
                                     alert('У кошику зафіксована партія ' + lock.batchIndex + ' і «' + lock.contentKey + '». Змішування партій заборонено. Оформіть окреме замовлення або очистьте кошик.');
                                     return;
                               }
-                              // Совпадает — можно добавлять
                         } else {
-                              // В корзине семейства нет: stale lock не нужен
                               if (lock) clearLock();
                               setLock({ batchIndex: idx, contentKey });
                               preLocked = true;
                               lock = getLock();
                         }
 
-                        // Квота и добавление
+                        // Квота
                         const resp = await fetch(QUOTE_ENDPOINT, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
@@ -293,10 +302,17 @@
                         const data = await resp.json();
                         if (!resp.ok || !data.ok) throw new Error(data?.error || resp.statusText);
 
-                        await new Promise((resolve) => {
-                              try { Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () { resolve(); }); }
-                              catch (_) { resolve(); }
-                        });
+                        // Добавление в корзину + FAILSAFE таймаут 4s
+                        const result = await Promise.race([
+                              new Promise((resolve) => {
+                                    try { Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () { resolve('cb'); }); }
+                                    catch (_) { resolve('catch'); }
+                              }),
+                              new Promise((resolve) => setTimeout(() => resolve('timeout'), 4000))
+                        ]);
+                        if (result === 'timeout') {
+                              console.warn('[POLISOL] addProduct callback timeout — продолжили по таймауту');
+                        }
                   } catch (err) {
                         if (preLocked) clearLock(); // ставили lock до добавления — убираем при ошибке
                         alert('Помилка серверу: ' + (err?.message || err));
@@ -353,6 +369,16 @@
             Ecwid.OnAPILoaded.add(async () => {
                   await ensureVue();
                   Ecwid.OnPageLoaded.add(async (page) => {
+                        // Зафиксируем SKU и принадлежность к семейству один раз на загрузку карточки
+                        if (page && page.type === 'PRODUCT') {
+                              const sku = getSku();
+                              if (sku) __cpc.currentSku = sku;
+                              __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0;
+                        } else {
+                              __cpc.currentSku = null;
+                              __cpc.isTargetMemo = null;
+                        }
+
                         if (page.type !== 'PRODUCT' || !isTargetProduct()) return;
 
                         try {
