@@ -5,13 +5,13 @@
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
 
       // === Константы ===
-      const FAMILY_PREFIX = 'ПОЛІСОЛ-';         // таргет по SKU
-      const RADIO_NAME_HINT = 'Вміст';          // имя группы радиокнопок (может отличаться, ищем эвристикой)
+      const FAMILY_PREFIX = 'ПОЛІСОЛ-';
+      const RADIO_NAME_HINT = 'Вміст';
 
       // === Ecwid boot ===
       function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
 
-      // === Vue boot (если нет — догружаем CDN) ===
+      // === Vue boot (если нет — догружаем) ===
       async function ensureVue() {
             if (window.Vue && Vue.createApp) return;
             await new Promise((resolve, reject) => {
@@ -22,7 +22,7 @@
             });
       }
 
-      // === Утилиты DOM/цены ===
+      // === DOM utils ===
       function getSku() {
             const sels = [
                   '[itemprop="sku"]', '.product-details__product-sku', '[data-product-sku]',
@@ -41,15 +41,14 @@
       }
       function isTargetProduct() { const sku = getSku() || ''; return sku.startsWith(FAMILY_PREFIX); }
 
-      // Поиск контейнера дропдауна «партії»
       function findBatchControl() {
-            // сначала по aria-label (частые варианты)
+            // 1) по aria-label
             const cands = ['розмір партії (вплив на опт.ціни)', 'розмір партії', 'размер партии', 'партія', 'партия'];
             for (const label of cands) {
                   const el = document.querySelector(`input[aria-label="${label}"]`);
                   if (el) return el.closest('.form-control') || null;
             }
-            // эвристика: любой .form-control, внутри текст с 15/30/45/60/75
+            // 2) эвристика по тексту (внутри .form-control есть 15/30/45/60/75)
             const ctrls = Array.from(document.querySelectorAll('.form-control'));
             for (const fc of ctrls) {
                   const t = (fc.querySelector('.form-control__select-text')?.textContent || fc.innerText || '').trim();
@@ -59,16 +58,13 @@
       }
       function readBatchCount() {
             const fc = findBatchControl(); if (!fc) return null;
-            // 1) из <select>
-            const sel = fc.querySelector('select[aria-label], select.form-control__select');
             let txt = '';
+            const sel = fc.querySelector('select[aria-label], select.form-control__select');
             if (sel && sel.selectedIndex >= 0) {
                   const opt = sel.options[sel.selectedIndex];
                   txt = (opt?.label || opt?.text || opt?.value || '').trim();
             }
-            // 2) текстовый дублёр Ecwid
             if (!txt) txt = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
-            // 3) последний шанс — весь текст
             if (!txt) txt = (fc.innerText || '').trim();
             const m = txt.match(/\b(15|30|45|60|75)\b/);
             return m ? parseInt(m[1], 10) : null;
@@ -76,6 +72,20 @@
       function batchCountToIndex(n) { return (n === 15 ? 1 : n === 30 ? 2 : n === 45 ? 3 : n === 60 ? 4 : n === 75 ? 5 : null); }
       function indexToBatchCount(idx) { return ({ 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 })[idx] || null; }
 
+      function getContentRadios() {
+            let radios = Array.from(document.querySelectorAll('input[type="radio"].form-control__radio'));
+            const byName = radios.filter(r => /вміст/i.test(r.getAttribute('name') || ''));
+            if (byName.length) radios = byName;
+            if (!radios.length) radios = Array.from(document.querySelectorAll(`input.form-control__radio[name="${RADIO_NAME_HINT}"]`));
+            return radios;
+      }
+      function getCheckedContent() {
+            const radios = getContentRadios();
+            const checked = radios.find(r => r.checked);
+            if (!checked) return null;
+            const label = document.querySelector(`label[for="${checked.id}"]`)?.textContent?.trim() || checked.value || '';
+            return label.replace(/[«»"]/g, '').replace(/\s+/g, ' ').trim();
+      }
       function findQtyInput() {
             return document.querySelector('.details-product-purchase__qty input[type="number"]') ||
                   document.querySelector('input[type="number"][name="quantity"]');
@@ -92,26 +102,11 @@
       function formatUAH(n) {
             const s = Number(n).toFixed(2);
             const [i, d] = s.split('.');
-            const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F'); // узкий неразрывный пробел
+            const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F'); // узкий non-breaking space
             return `₴${grouped}.${d}`;
       }
 
-      // Радиокнопки «Вміст»
-      function getCheckedContent() {
-            // пробуем максимально общий селектор
-            let radios = Array.from(document.querySelectorAll('input[type="radio"].form-control__radio'));
-            // сузим по name, если возможно
-            const byName = radios.filter(r => /вміст/i.test(r.getAttribute('name') || ''));
-            if (byName.length) radios = byName;
-            // если всё равно пусто — план Б: строгое имя
-            if (!radios.length) radios = Array.from(document.querySelectorAll(`input.form-control__radio[name="${RADIO_NAME_HINT}"]`));
-            const checked = radios.find(r => r.checked);
-            if (!checked) return null;
-            const label = document.querySelector(`label[for="${checked.id}"]`)?.textContent?.trim() || checked.value || '';
-            return label.replace(/[«»"]/g, '').replace(/\s+/g, ' ').trim();
-      }
-
-      // Нормализация к канону для таблицы цен
+      // === Канон для таблицы цен ===
       function canonLabel(lblRaw) {
             const t = (lblRaw || '').toLowerCase();
             if (/класич/i.test(t) || /класіч/i.test(t)) return 'Класичний';
@@ -124,22 +119,19 @@
             if (/квас/i.test(t)) return 'Квас трипільський';
             return null;
       }
-
-      // SKU → batchIndex из корзины
       function extractBatchIdxFromSku(sku) {
             const m = String(sku || '').match(/ПОЛІСОЛ-[A-ZА-ЯІЇЄҐ]+-(\d)$/i);
             return m ? parseInt(m[1], 10) : null;
       }
       function getCartBatchIdx(cart) {
             const idxs = (cart.items || []).map(it => extractBatchIdxFromSku(it.sku)).filter(v => v != null);
-            return idxs.length ? idxs[0] : null; // считаем корзину однородной по партии
+            return idxs.length ? idxs[0] : null;
       }
 
       // === Vue виджет ===
       function mountApp(pricing) {
             const { createApp, ref, computed, onMounted } = Vue;
 
-            // Место для таблички набора
             let host = document.getElementById('cpc-polisol-summary');
             if (!host) {
                   host = document.createElement('div');
@@ -154,29 +146,34 @@
                         const unitPrice = ref(0);
                         const cartItems = ref([]);
                         const batchIndex = ref(null);
+                        let lastSig = ''; // подпись состояния, чтобы лишний раз не перерисовывать
 
                         function updatePriceUI() {
                               const { span, box } = priceEls();
                               if (!span) return;
                               if (!originalPriceText.value) originalPriceText.value = span.textContent;
-                              if (unitPrice.value) {
-                                    span.textContent = formatUAH(unitPrice.value);
-                                    if (box) box.setAttribute('content', String(unitPrice.value));
-                              } else {
-                                    if (originalPriceText.value) span.textContent = originalPriceText.value;
+                              const next = unitPrice.value ? formatUAH(unitPrice.value) : originalPriceText.value || '';
+                              if (span.textContent !== next) {
+                                    span.textContent = next;
+                                    if (box && unitPrice.value) box.setAttribute('content', String(unitPrice.value));
                               }
                         }
 
                         function refreshUnitPrice() {
                               const bCount = readBatchCount();
                               const idx = bCount ? batchCountToIndex(bCount) : null;
-                              batchIndex.value = idx;
                               const lbl = getCheckedContent();
                               const canon = lbl ? canonLabel(lbl) : null;
 
+                              const sig = `${idx || 0}|${canon || ''}`;
+                              if (sig === lastSig) return; // ничего не поменялось
+                              lastSig = sig;
+
+                              batchIndex.value = idx;
+
                               if (idx && canon && pricing?.pricing?.[canon]) {
-                                    const priceRow = pricing.pricing[canon];
-                                    unitPrice.value = priceRow[idx - 1] || 0;
+                                    const row = pricing.pricing[canon];
+                                    unitPrice.value = row[idx - 1] || 0;
                               } else {
                                     unitPrice.value = 0;
                               }
@@ -200,6 +197,32 @@
 
                         function sumForItems(items) { return items.reduce((a, it) => a + it.sum, 0); }
                         const total = computed(() => formatUAH(sumForItems(cartItems.value)));
+
+                        // ——— КЛЮЧЕВОЕ: слушаем только change, без MutationObserver
+                        function wireOptionEvents() {
+                              if (window.__cpc_change_wired) return;
+
+                              document.addEventListener('change', (e) => {
+                                    const t = e.target;
+                                    if (!t) return;
+                                    // дропдаун партии (select) или его прокси
+                                    if (t.matches && (t.matches('select[aria-label], select.form-control__select') ||
+                                          (t.matches('input[aria-label]') && /\b(парті|партии|розмір)\b/i.test(t.getAttribute('aria-label') || '')))) {
+                                          refreshUnitPrice();
+                                          return;
+                                    }
+                                    // радиокнопки «Вміст»
+                                    if (t.matches && t.matches('input[type="radio"]')) {
+                                          // проверим, что это группа «Вміст» (по name/label)
+                                          const name = (t.getAttribute('name') || '').toLowerCase();
+                                          if (/вміст/.test(name) || document.querySelector(`label[for="${t.id}"]`)?.textContent?.match(/Клас|Шипшин|Журавлин|Квас|Матусин|Чоловіч/i)) {
+                                                refreshUnitPrice();
+                                          }
+                                    }
+                              }, true);
+
+                              window.__cpc_change_wired = true;
+                        }
 
                         function attachAddToCartInterceptor() {
                               if (window.__cpc_add_hooked) return;
@@ -259,66 +282,59 @@
                               }
                         }
 
-                        function observeOptionChanges() {
-                              const root =
-                                    document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') ||
-                                    document.querySelector('.ec-store, .ecwid-productBrowser') ||
-                                    document.body;
-                              const mo = new MutationObserver(() => {
-                                    refreshUnitPrice();
-                              });
-                              mo.observe(root, { childList: true, subtree: true });
-                        }
-
                         onMounted(() => {
+                              // начальный рассчёт
                               refreshUnitPrice();
+                              // события опций
+                              wireOptionEvents();
+                              // корзина
                               fetchCartAndRender();
                               Ecwid.OnCartChanged.add(fetchCartAndRender);
-                              observeOptionChanges();
+                              // перехват add-to-cart
                               attachAddToCartInterceptor();
                         });
 
                         return { cartItems, total, formatUAH };
                   },
                   template: `
-        <div v-if="cartItems.length" style="margin-top:8px;border-top:1px solid rgba(0,0,0,.08);padding-top:8px">
-          <div style="font-weight:600;margin-bottom:6px">Ваш набір (для обраної партії)</div>
-          <div style="overflow:auto">
-            <table style="width:100%;border-collapse:collapse;font-size:14px">
-              <thead>
-                <tr>
-                  <th style="text-align:left;padding:4px 6px">№</th>
-                  <th style="text-align:left;padding:4px 6px">Товар</th>
-                  <th style="text-align:right;padding:4px 6px">К-сть</th>
-                  <th style="text-align:right;padding:4px 6px">Ціна</th>
-                  <th style="text-align:right;padding:4px 6px">Сума</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="it in cartItems" :key="it.n">
-                  <td style="padding:4px 6px">{{ it.n }}</td>
-                  <td style="padding:4px 6px">{{ it.name }}</td>
-                  <td style="padding:4px 6px;text-align:right">{{ it.quantity }}</td>
-                  <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.price) }}</td>
-                  <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.sum) }}</td>
-                </tr>
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colspan="4" style="padding:6px 6px;text-align:right;font-weight:600">Разом</td>
-                  <td style="padding:6px 6px;text-align:right;font-weight:600">{{ total }}</td>
-                </tr>
-              </tfoot>
+      <div v-if="cartItems.length" style="margin-top:8px;border-top:1px solid rgba(0,0,0,.08);padding-top:8px">
+            <div style="font-weight:600;margin-bottom:6px">Ваш набір (для обраної партії)</div>
+            <div style="overflow:auto">
+                  <table style="width:100%;border-collapse:collapse;font-size:14px">
+                        <thead>
+                              <tr>
+                                    <th style="text-align:left;padding:4px 6px">№</th>
+                                    <th style="text-align:left;padding:4px 6px">Товар</th>
+                                    <th style="text-align:right;padding:4px 6px">К-сть</th>
+                                    <th style="text-align:right;padding:4px 6px">Ціна</th>
+                                    <th style="text-align:right;padding:4px 6px">Сума</th>
+                              </tr>
+                        </thead>
+                        <tbody>
+                              <tr v-for="it in cartItems" :key="it.n">
+                              <td style="padding:4px 6px">{{ it.n }}</td>
+                              <td style="padding:4px 6px">{{ it.name }}</td>
+                              <td style="padding:4px 6px;text-align:right">{{ it.quantity }}</td>
+                              <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.price) }}</td>
+                              <td style="padding:4px 6px;text-align:right">{{ formatUAH(it.sum) }}</td>
+                        </tr>
+                  </tbody>
+                  <tfoot>
+                        <tr>
+                              <td colspan="4" style="padding:6px 6px;text-align:right;font-weight:600">Разом</td>
+                              <td style="padding:6px 6px;text-align:right;font-weight:600">{{ total }}</td>
+                        </tr>
+                  </tfoot>
             </table>
-          </div>
-        </div>
-      `
+      </div>
+</div>
+`
             });
 
             app.mount('#cpc-polisol-summary');
       }
 
-      // === Bootstrap: на продукте нашей семьи ===
+      // === Bootstrap ===
       waitEcwid(() => {
             Ecwid.OnAPILoaded.add(() => {
                   Ecwid.OnPageLoaded.add(async (page) => {
