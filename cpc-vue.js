@@ -1,12 +1,12 @@
-/* POLISOL widget v2025-09-06-22  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-22)
-   Фиксы:
-   - Вернул отсутствующую функцию renderCartSummary() → нет ReferenceError.
-   - Не очищаю lock при пост-рендерных ошибках (чтобы не ловить "є товар без lock").
-   - Без мерцаний, таблица/панель обновляются только при реальных изменениях.
+/* POLISOL widget v2025-09-06-23  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-23)
+   - Таблица снова заполняется (надежный отбор позиций POLISOL + фоллбек цены из pricingCache).
+   - Прогресс-бар заметный (12px, рамка), корректно показывает прогресс.
+   - OnCartChanged -> renderCartSummary() с новым fetchCart().
+   - Прочее поведение без изменений (фиксируем ТОЛЬКО размер партії; смешивать «Вміст» можно до лимита).
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-22 ready');
+      console.info('POLISOL widget v2025-09-06-23 ready');
 
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -33,7 +33,7 @@
             inlineFP: null
       });
 
-      // === Lock ===
+      // === Lock (фиксируем ТОЛЬКО размер партії) ===
       const LOCK_KEY = 'POLISOL_LOCK';
       const getLock = () => { try { return JSON.parse(sessionStorage.getItem(LOCK_KEY) || 'null'); } catch (_) { return null; } };
       const setLock = (o) => { try { sessionStorage.setItem(LOCK_KEY, JSON.stringify(o)); } catch (_) { } };
@@ -47,9 +47,15 @@
                   catch (_) { resolve({ items: [] }); }
             });
       }
-      const itemSku = (it) => (it && (it.sku || it.productSku || it.product?.sku)) || '';
-      const cartHasFamily = (items) => (items || []).some((it) => itemSku(it).indexOf(FAMILY_PREFIX) === 0);
-      const sumFamilyQty = (items) => (items || []).reduce((acc, it) => acc + (itemSku(it).indexOf(FAMILY_PREFIX) === 0 ? (Number(it.quantity) || 0) : 0), 0);
+      const itemSku = (it) => (it && (it.sku || it.productSku || it.product?.sku) || '').toString();
+      const itemName = (it) => (it && (it.name || it.product?.name) || '').toString();
+      function isPolisolItem(it) {
+            const skuU = itemSku(it).toUpperCase();
+            const nameU = itemName(it).toUpperCase();
+            return (skuU.indexOf(FAMILY_PREFIX) === 0) || nameU.includes('ПОЛІСОЛ') || nameU.includes('POLISOL');
+      }
+      const cartHasFamily = (items) => (items || []).some(isPolisolItem);
+      const sumFamilyQty = (items) => (items || []).reduce((acc, it) => acc + (isPolisolItem(it) ? (Number(it.quantity) || 0) : 0), 0);
 
       // === Utils ===
       async function ensureVue() {
@@ -135,10 +141,27 @@
             if (m && m[1]) return removeQuotes(m[1]);
             return canonContent(name) || '';
       }
-      function getUnitPrice(it) {
-            const cand = [it?.price, it?.product?.price, it?.productPrice, it?.priceWithoutTax, it?.salePrice];
+      function getUnitPriceFromCache(it, lock) {
+            try {
+                  if (!pricingCache?.__index || !lock?.batchIndex) return 0;
+                  const canon = canonContent(getItemContentLabel(it) || itemName(it));
+                  if (!canon) return 0;
+                  const row = pricingCache.__index[normalizeKey(canon)];
+                  const p = row ? Number(row[(lock.batchIndex - 1) | 0]) : 0;
+                  return isFinite(p) && p > 0 ? p : 0;
+            } catch (_) { return 0; }
+      }
+      function getUnitPrice(it, lock) {
+            const cand = [
+                  it?.price,
+                  it?.product?.price,
+                  it?.productPrice,
+                  it?.priceWithoutTax,
+                  it?.salePrice,
+                  it?.priceInProductCurrency
+            ];
             for (const v of cand) { const n = Number(v); if (isFinite(n) && n > 0) return n; }
-            return 0;
+            return getUnitPriceFromCache(it, lock);
       }
 
       // === Цена (UI) ===
@@ -204,8 +227,8 @@
 .polisol-inline { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .polisol-inline-row { display:flex; gap:10px; flex-wrap: wrap; align-items: center; }
 .polisol-hint { font-size: 14px; color: #555; }
-.polisol-progress { height: 8px; background: #f0f2f5; border-radius: 999px; overflow: hidden; }
-.polisol-progress__bar { height: 100%; background: #2c7be5; width: 0%; transition: width .25s ease; }
+.polisol-progress { height: 12px; background: #f0f2f5; border-radius: 999px; overflow: hidden; border: 1px solid #dce1ea; }
+.polisol-progress__bar { height: 100%; background: linear-gradient(90deg, #2c7be5, #5aa6ff); width: 0%; transition: width .25s ease; }
 
 .ec-button { display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border-radius:8px; text-decoration:none; border:1px solid transparent; cursor:pointer; font-weight:600; }
 .ec-button--primary { background:#2c7be5; color:#fff; }
@@ -229,17 +252,17 @@
       }
       function inferCanonFromName(name) { const n = String(name || ''); const m = n.match(/«([^»]+)»/); if (m && m[1]) return removeQuotes(m[1]); return canonContent(n) || ''; }
       function cartFingerprint(items, lock) {
-            const fam = (items || []).filter(it => itemSku(it).indexOf(FAMILY_PREFIX) === 0);
+            const fam = (items || []).filter(isPolisolItem);
             const li = (lock && lock.batchIndex) ? String(lock.batchIndex) : '0';
             const parts = ['L' + li];
-            for (const it of fam) { parts.push(itemSku(it) + ':' + (it.quantity || 0) + ':' + (getUnitPrice(it) || 0)); }
+            for (const it of fam) { parts.push(itemSku(it) + ':' + (it.quantity || 0) + ':' + (getUnitPrice(it, lock) || 0)); }
             return parts.join('|');
       }
       function renderCartSummarySync(cart) {
             const host = ensureSummaryContainer();
             const body = host.querySelector('#polisol-body');
             const items = (cart && cart.items) || [];
-            const fam = items.filter(it => itemSku(it).indexOf(FAMILY_PREFIX) === 0);
+            const fam = items.filter(isPolisolItem);
             const lock = getLock();
             const limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
 
@@ -258,7 +281,7 @@
                   const canon = getItemContentLabel(it) || inferCanonFromName(it.name || '') || '—';
                   const label = `ПОЛІСОЛ™«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
                   const qty = Number(it.quantity || 0);
-                  const unit = getUnitPrice(it);
+                  const unit = getUnitPrice(it, lock);
                   const sum = unit * qty; total += sum;
                   rows += `
         <tr>
@@ -294,10 +317,8 @@
       </table>`;
       }
       async function renderCartSummary() {
-            try {
-                  const cart = await fetchCart();
-                  renderCartSummarySync(cart);
-            } catch (_) { /* noop */ }
+            try { const cart = await fetchCart(); renderCartSummarySync(cart); }
+            catch (_) { /* noop */ }
       }
 
       // === INLINE PANEL after Add to Bag ===
@@ -306,7 +327,7 @@
             if (panel) return panel;
 
             const addBtn = document.querySelector('.details-product-purchase__add-to-bag button.form-control__button');
-            if (!addBtn) return null;
+            if (!addBtn || !addBtn.parentNode) return null;
 
             panel = document.createElement('div');
             panel.id = 'polisol-inline';
@@ -429,13 +450,11 @@
                         new Promise((resolve) => { try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, function () { resolve('cb'); }); } catch (_) { resolve('catch'); } }),
                         new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000))
                   ]);
-                  // даже при timeout добавление обычно произошло — считаем, что добавлено
                   added = (result === 'cb' || result === 'timeout' || result === 'catch');
 
                   await renderCartSummary();
                   await renderInlinePanel();
             } catch (err) {
-                  // очищаем lock только если мы ставили его в этом клике и добавление точно НЕ произошло
                   if (lockSetThisClick && !added) clearLock();
                   alert('Помилка серверу: ' + (err?.message || err));
             } finally {
@@ -474,11 +493,14 @@
       }
       function bindCartGuard() {
             if (__cpc.cartBound) return;
-            Ecwid.OnCartChanged.add((cart) => {
-                  const items = (cart && cart.items) || [];
-                  if (!cartHasFamily(items)) clearLock();
-                  try { renderCartSummarySync({ items }); } catch (_) { }
-                  try { renderInlinePanel({ items }); } catch (_) { }
+            Ecwid.OnCartChanged.add(async (_cart) => {
+                  try {
+                        // всегда подтягиваем актуальный cart из API (в событии может не быть цен и части полей)
+                        await renderCartSummary();
+                        await renderInlinePanel();
+                        const items = _cart?.items || [];
+                        if (!cartHasFamily(items)) clearLock();
+                  } catch (_) { }
             });
             __cpc.cartBound = true;
       }
