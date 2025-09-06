@@ -1,5 +1,5 @@
 /* POLISOL widget v2025-09-06-10 */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (guarded observers, throttled) */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (safe for canvas) */
 (() => {
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -12,7 +12,7 @@
       // === Globals ===
       let pricingCache = null; // { ok, pricing:{}, __index:{} }
       let initialPriceText = null;
-      const __cpc = (window.__cpc = window.__cpc || { optsBound: false, mo: null, moScheduled: false });
+      const __cpc = (window.__cpc = window.__cpc || { optsBound: false, mo: null, moScheduled: false, warned: new Set() });
 
       // === Utils ===
       function waitEcwid(cb) {
@@ -25,40 +25,55 @@
                         const s = document.createElement('script');
                         s.src = 'https://unpkg.com/vue@3/dist/vue.global.prod.js';
                         s.onload = res;
-                        s.onerror = () => res(); // Vue опционален — не блокируем
+                        s.onerror = () => res();
                         document.head.appendChild(s);
                   });
             } catch (_) { /* noop */ }
       }
 
       function formatUAH(n) {
-            const s = Number(n || 0).toFixed(2);
-            const [i, d] = s.split('.');
-            const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
-            return `₴${grouped}.${d}`;
-      }
-      function normalizeKey(s) {
-            return normApos(String(s))
-                  .replace(/[«»"]/g, '')
-                  .trim()
-                  .toLowerCase();
+            try { return '₴' + Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+            catch (_) { return '₴' + (Number(n || 0)).toFixed(2); }
       }
 
-      function normApos(s) { return String(s || '').replace(/[\u2019\u02BC\u2032\u00B4]/g, "'"); }
+      function replaceAll(src, what, withWhat) { return String(src).split(what).join(withWhat); }
+      function removeQuotes(s) { return replaceAll(replaceAll(replaceAll(String(s), '«', ''), '»', ''), '"', ''); }
+      function normApos(s) {
+            let r = String(s || '');
+            r = replaceAll(r, '’', "'"); // U+2019
+            r = replaceAll(r, 'ʼ', "'"); // U+02BC
+            r = replaceAll(r, '′', "'"); // U+2032
+            r = replaceAll(r, '´', "'"); // U+00B4
+            return r;
+      }
+      function normalizeKey(s) { return removeQuotes(normApos(String(s))).trim().toLowerCase(); }
 
-      function canonContent(label) {
-            const t = normApos(label).replace(/[«»"]/g, '').trim().toLowerCase();
-            if (!t) return null;
-            if (t.includes('білий')) return 'Квас трипільський (білий)';
-            if (t.includes('коріандр')) return 'Квас трипільський з коріандром';
-            if (t.includes('класич')) return 'Класичний';
-            if (t.includes('шипшин')) return 'Шипшина';
-            if (t.includes('журавлин')) return 'Журавлина';
-            if (t.includes('матусин') || t.includes("матусине здоров'я") || t.includes('матусине здоров')) return "Матусине здоров'я";
-            if (t.includes('чоловіч')) return 'Чоловіча Сила';
-            if (t.includes('квас')) return 'Квас трипільський';
+      function extractAllowedNumber(str, allowed) {
+            const a = String(str || '');
+            let curr = '';
+            for (let i = 0; i < a.length; i++) {
+                  const ch = a[i];
+                  if (ch >= '0' && ch <= '9') { curr += ch; }
+                  else if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; curr = ''; }
+            }
+            if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; }
             return null;
       }
+
+      function canonContent(label) {
+            const t = normalizeKey(label);
+            if (!t) return null;
+            if (t.indexOf('білий') >= 0) return 'Квас трипільський (білий)';
+            if (t.indexOf('коріандр') >= 0) return 'Квас трипільський з коріандром';
+            if (t.indexOf('класич') >= 0) return 'Класичний';
+            if (t.indexOf('шипшин') >= 0) return 'Шипшина';
+            if (t.indexOf('журавлин') >= 0) return 'Журавлина';
+            if (t.indexOf('матусин') >= 0 || t.indexOf("матусине здоров'я") >= 0 || t.indexOf('матусине здоров') >= 0) return "Матусине здоров'я";
+            if (t.indexOf('чоловіч') >= 0) return 'Чоловіча Сила';
+            if (t.indexOf('квас') >= 0) return 'Квас трипільський';
+            return null;
+      }
+
       function contentKeyForCanon(canon) {
             switch (canon) {
                   case 'Класичний': return 'classic';
@@ -88,53 +103,52 @@
                   if (!el) continue;
                   const raw = (el.getAttribute('content') || el.textContent || '').trim();
                   if (!raw) continue;
-                  const tokens = raw.toUpperCase().match(/[A-ZА-ЯІЇЄҐ0-9._-]+/g) || [];
+                  const up = raw.toUpperCase();
+                  const tokens = up.split(' ').filter(Boolean);
                   const filtered = tokens.filter(t => t !== 'SKU');
                   if (filtered.length) return filtered[filtered.length - 1];
             }
             return null;
       }
-      function isTargetProduct() { return (getSku() || '').startsWith(FAMILY_PREFIX); }
+      function isTargetProduct() { const sku = getSku() || ''; return sku.indexOf(FAMILY_PREFIX) === 0; }
 
-      // === Batch helpers ===
       function findBatchControl() {
             const selects = Array.from(document.querySelectorAll('.form-control__select'));
             for (const s of selects) {
-                  const optTexts = Array.from(s.options || []).map(o => o.textContent || '');
-                  const joined = optTexts.join(' ');
-                  if (/(^|\b)(15|30|45|60|75)(\b|$)/.test(joined)) return s.closest('.form-control');
+                  const opts = Array.from(s.options || []).map(o => o.textContent || '').join(' ');
+                  if (extractAllowedNumber(opts, [15, 30, 45, 60, 75]) != null) return s.closest('.form-control') || null;
             }
             const controls = Array.from(document.querySelectorAll('.form-control'));
             for (const fc of controls) {
                   const t = (fc.innerText || '').trim();
-                  if (/(^|\b)(15|30|45|60|75)(\b|$)/.test(t)) return fc;
+                  if (extractAllowedNumber(t, [15, 30, 45, 60, 75]) != null) return fc;
             }
             return null;
       }
+
       function readBatchCount() {
             const fc = findBatchControl();
             if (!fc) return null;
             const sel = fc.querySelector('.form-control__select');
-            if (sel && sel.value && !/Виберіть|Выберите|Select/i.test(sel.value)) {
-                  const m = sel.value.match(/\b(15|30|45|60|75)\b/);
-                  return m ? parseInt(m[0], 10) : null;
+            if (sel && sel.value && ['Виберіть', 'Выберите', 'Select'].every(x => sel.value.indexOf(x) < 0)) {
+                  const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]);
+                  return v != null ? v : null;
             }
-            const txt = fc.querySelector('.form-control__select-text')?.textContent?.trim() || fc.textContent || '';
-            const m2 = txt.match(/\b(15|30|45|60|75)\b/);
-            return m2 ? parseInt(m2[0], 10) : null;
+            const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
+            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]);
+            return vv != null ? vv : null;
       }
+
       function batchCountToIndex(n) { return (n === 15 ? 1 : n === 30 ? 2 : n === 45 ? 3 : n === 60 ? 4 : n === 75 ? 5 : null); }
 
-      // === "Вміст" (radios) ===
       function getCheckedContent() {
             const radios = Array.from(document.querySelectorAll('input.form-control__radio'));
             const r = radios.find(x => x.checked);
             if (!r) return null;
-            const lbl = document.querySelector(`label[for="${r.id}"]`)?.textContent?.trim() || r.value || '';
-            return lbl.replace(/[«»"]/g, '').trim();
+            const lbl = (document.querySelector('label[for="' + r.id + '"]')?.textContent || r.value || '').trim();
+            return removeQuotes(lbl).trim();
       }
 
-      // === Цена (UI) ===
       function priceEls() {
             const span = document.querySelector('.details-product-price__value.ec-price-item');
             const box = document.querySelector('.product-details__product-price.ec-price-item[itemprop="price"]')
@@ -154,30 +168,24 @@
             }
       }
 
-      // === Обновление цены по выбранным опциям ===
       function refreshUnitPrice() {
             if (!pricingCache || !pricingCache.ok) { setPriceUI(null); return { idx: null, canon: null, price: null }; }
             const bCount = readBatchCount();
             const idx = bCount ? batchCountToIndex(bCount) : null;
             const rawLabel = getCheckedContent();
             const canon = rawLabel ? canonContent(rawLabel) : null;
-
             if (idx && canon) {
                   const key = normalizeKey(canon);
                   const row = (pricingCache.__index && pricingCache.__index[key]) || null;
-
                   if (!row) {
-                        const warned = (__cpc.warned = __cpc.warned || new Set());
-                        if (!warned.has(key)) {
-                              console.warn('[POLISOL] price row not found for', canon, 'key=', key,
-                                    'available=', Object.keys(pricingCache.__index || {}));
-                              warned.add(key);
+                        if (!__cpc.warned.has(key)) {
+                              console.warn('[POLISOL] price row not found for', canon, 'key=', key, 'available=', Object.keys(pricingCache.__index || {}));
+                              __cpc.warned.add(key);
                         }
                         setPriceUI(null);
                         return { idx, canon, price: null };
                   }
-
-                  const price = row[idx - 1] || 0;
+                  const price = row[(idx - 1) | 0] || 0;
                   setPriceUI(price);
                   return { idx, canon, price };
             } else {
@@ -186,11 +194,8 @@
             }
       }
 
-      // === Add to cart interception ===
-      function findQtyInput() {
-            return document.querySelector('.details-product-purchase__qty input[type="number"]')
-                  || document.querySelector('input[type="number"][name="quantity"]');
-      }
+      function findQtyInput() { return document.querySelector('.details-product-purchase__qty input[type="number"]') || document.querySelector('input[type="number"][name="quantity"]'); }
+
       function attachAddToCart() {
             if (window.__cpc_add_bound) return;
             document.addEventListener('click', async (e) => {
@@ -199,62 +204,38 @@
                   const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button');
                   if (!btn) return;
                   if (!isTargetProduct()) return;
-
                   e.preventDefault();
                   e.stopPropagation();
-
                   const { idx, canon } = refreshUnitPrice();
                   if (!idx) return alert('Оберіть розмір партії.');
                   if (!canon) return alert('Оберіть «Вміст».');
-
                   const contentKey = contentKeyForCanon(canon);
                   if (!contentKey) return alert('Невідомий «Вміст» (contentKey).');
-
                   const qty = Math.max(1, parseInt((findQtyInput()?.value || '1'), 10) || 1);
-
                   try {
-                        const r = await fetch(QUOTE_ENDPOINT, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ contentKey, batchIndex: idx })
-                        });
+                        const r = await fetch(QUOTE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contentKey, batchIndex: idx }) });
                         const data = await r.json();
                         if (!r.ok || !data.ok) throw new Error(data?.error || r.statusText);
-                        Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () { /* ok */ });
-                  } catch (err) {
-                        alert(`Помилка серверу: ${err?.message || err}`);
-                  }
+                        Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () { });
+                  } catch (err) { alert('Помилка серверу: ' + (err?.message || err)); }
             }, true);
             window.__cpc_add_bound = true;
       }
 
-      // === Reactivity hooks ===
       function bindOptionChange() {
             if (__cpc.optsBound) return;
-            document.addEventListener('change', (e) => {
-                  if (e.target && e.target.matches && e.target.matches('.form-control__select')) refreshUnitPrice();
-            }, true);
-            document.addEventListener('change', (e) => {
-                  if (e.target && e.target.matches && e.target.matches('input.form-control__radio')) refreshUnitPrice();
-            }, true);
+            document.addEventListener('change', (e) => { if (e.target && e.target.matches && e.target.matches('.form-control__select')) refreshUnitPrice(); }, true);
+            document.addEventListener('change', (e) => { if (e.target && e.target.matches && e.target.matches('input.form-control__radio')) refreshUnitPrice(); }, true);
             __cpc.optsBound = true;
       }
 
       function observeDom() {
-            const root =
-                  document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details')
-                  || document.querySelector('.ec-store, .ecwid-productBrowser');
-            if (!root) return;
-
+            const root = document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.querySelector('.ec-store, .ecwid-productBrowser') || document.body;
             if (__cpc.mo) { try { __cpc.mo.disconnect(); } catch (_) { } }
-
             const mo = new MutationObserver(() => {
                   if (__cpc.moScheduled) return;
                   __cpc.moScheduled = true;
-                  requestAnimationFrame(() => {
-                        __cpc.moScheduled = false;
-                        refreshUnitPrice();
-                  });
+                  requestAnimationFrame(() => { __cpc.moScheduled = false; refreshUnitPrice(); });
             });
             mo.observe(root, { childList: true, subtree: true });
             __cpc.mo = mo;
@@ -266,25 +247,15 @@
                   await ensureVue();
                   Ecwid.OnPageLoaded.add(async (page) => {
                         if (page.type !== 'PRODUCT' || !isTargetProduct()) return;
-
                         try {
                               const res = await fetch(PRICING_ENDPOINT);
-                              const idxMap = {};
-                              for (const [k, row] of Object.entries(pr.pricing || {})) {
-                                    idxMap[normalizeKey(k)] = row;
-                              }
-                              pricingCache = { ...pr, __index: idxMap };
-
                               const pr = await res.json();
                               if (!pr?.ok) throw new Error('pricing not ok');
                               const idxMap = {};
-                              for (const [k, row] of Object.entries(pr.pricing || {})) idxMap[normApos(k)] = row;
+                              const entries = Object.entries(pr.pricing || {});
+                              for (let i = 0; i < entries.length; i++) { idxMap[normalizeKey(entries[i][0])] = entries[i][1]; }
                               pricingCache = { ...pr, __index: idxMap };
-                        } catch (e) {
-                              console.error('Failed to load pricing', e);
-                              pricingCache = null;
-                        }
-
+                        } catch (e) { console.error('Failed to load pricing', e); pricingCache = null; }
                         bindOptionChange();
                         observeDom();
                         attachAddToCart();
