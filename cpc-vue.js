@@ -1,38 +1,28 @@
-(function () {
+(() => {
       // === Endpoints ===
-      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app'; // при необходимости замени
+      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
 
       // === Константы ===
-      const FAMILY_PREFIX = 'ПОЛІСОЛ-'; // таргет по SKU
+      const FAMILY_PREFIX = 'ПОЛІСОЛ-';         // таргет по SKU
+      const RADIO_NAME_HINT = 'Вміст';          // имя группы радиокнопок (может отличаться, ищем эвристикой)
 
-      // Кандидаты имён радио-группы «Вміст»
-      const RADIO_NAME_CANDIDATES = ['Вміст', 'Вмiст', 'Вміст ', 'вміст', 'content', 'состав'];
-
-      // Подписи для дропдауна партии — ищем гибко
-      const BATCH_ARIA_CANDS = [
-            'розмір партії (вплив на опт.ціни)',
-            'розмір партії',
-            'размер партии',
-            'партія',
-            'партия'
-      ];
-
-      // === Утилиты ===
+      // === Ecwid boot ===
       function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
 
-      function ensureVue(cb) {
-            if (window.Vue && window.Vue.createApp) return cb();
-            const s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/vue@3.5.11/dist/vue.global.prod.min.js';
-            s.onload = cb;
-            s.onerror = () => console.error('[cpc] failed to load Vue CDN');
-            document.head.appendChild(s);
+      // === Vue boot (если нет — догружаем CDN) ===
+      async function ensureVue() {
+            if (window.Vue && Vue.createApp) return;
+            await new Promise((resolve, reject) => {
+                  const s = document.createElement('script');
+                  s.src = 'https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js';
+                  s.onload = resolve; s.onerror = reject;
+                  document.head.appendChild(s);
+            });
       }
 
-      function qsAll(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
-
+      // === Утилиты DOM/цены ===
       function getSku() {
             const sels = [
                   '[itemprop="sku"]', '.product-details__product-sku', '[data-product-sku]',
@@ -49,80 +39,40 @@
             }
             return null;
       }
-      function isTargetProduct() {
-            const sku = getSku() || '';
-            return sku.startsWith(FAMILY_PREFIX);
-      }
+      function isTargetProduct() { const sku = getSku() || ''; return sku.startsWith(FAMILY_PREFIX); }
 
-      // Найти input (aria-label) и control для блока партии
-      function findBatchInput() {
-            for (const label of BATCH_ARIA_CANDS) {
-                  const el = document.querySelector(`input[aria-label="${label}"]`);
-                  if (el) return el;
-            }
-            const allInputs = qsAll('input[aria-label]');
-            const el2 = allInputs.find(i => {
-                  const v = (i.getAttribute('aria-label') || '').toLowerCase();
-                  return BATCH_ARIA_CANDS.some(c => v.includes(c.toLowerCase()));
-            });
-            if (el2) return el2;
-
-            const candidates = qsAll('.form-control input[readonly], .form-control input[tabindex="-1"]');
-            for (const inp of candidates) {
-                  const txt = inp.closest('.form-control')?.querySelector('.form-control__select-text')?.textContent?.trim() || '';
-                  if (/\b(15|30|45|60|75)\b/.test(txt)) return inp;
-            }
-            return null;
-      }
+      // Поиск контейнера дропдауна «партії»
       function findBatchControl() {
-            const aria = findBatchInput();
-            if (aria) return aria.closest('.form-control') || null;
-
-            const controls = qsAll('.form-control');
-            for (const fc of controls) {
-                  const txt = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
-                  if (/\b(15|30|45|60|75)\b/.test(txt)) return fc;
+            // сначала по aria-label (частые варианты)
+            const cands = ['розмір партії (вплив на опт.ціни)', 'розмір партії', 'размер партии', 'партія', 'партия'];
+            for (const label of cands) {
+                  const el = document.querySelector(`input[aria-label="${label}"]`);
+                  if (el) return el.closest('.form-control') || null;
             }
-            for (const fc of controls) {
-                  const txt = (fc.innerText || '').trim();
-                  if (/\b(15|30|45|60|75)\b/.test(txt)) return fc;
+            // эвристика: любой .form-control, внутри текст с 15/30/45/60/75
+            const ctrls = Array.from(document.querySelectorAll('.form-control'));
+            for (const fc of ctrls) {
+                  const t = (fc.querySelector('.form-control__select-text')?.textContent || fc.innerText || '').trim();
+                  if (/\b(15|30|45|60|75)\b/.test(t)) return fc;
             }
             return null;
       }
       function readBatchCount() {
-            const fc = findBatchControl();
-            if (!fc) return null;
-
-            const sel = fc.querySelector('select.form-control__select');
-            if (sel) {
-                  const idx = sel.selectedIndex ?? -1; // 0 — placeholder "Виберіть"
-                  if (idx > 0) {
-                        const txt = sel.options[idx]?.textContent?.trim() || '';
-                        const m = txt.match(/\b(15|30|45|60|75)\b/);
-                        if (m) return parseInt(m[0], 10);
-                  } else {
-                        return null;
-                  }
+            const fc = findBatchControl(); if (!fc) return null;
+            // 1) из <select>
+            const sel = fc.querySelector('select[aria-label], select.form-control__select');
+            let txt = '';
+            if (sel && sel.selectedIndex >= 0) {
+                  const opt = sel.options[sel.selectedIndex];
+                  txt = (opt?.label || opt?.text || opt?.value || '').trim();
             }
-
-            const txtA = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
-            const mA = txtA.match(/\b(15|30|45|60|75)\b/);
-            if (mA) return parseInt(mA[0], 10);
-
-            const inp = fc.querySelector('input[aria-label], input.form-control__text');
-            const txtB = (inp?.value || '').trim();
-            const mB = txtB.match(/\b(15|30|45|60|75)\b/);
-            if (mB) return parseInt(mB[0], 10);
-
-            const isEmpty = fc.classList.contains('form-control--empty');
-            if (!isEmpty) {
-                  const txtC = (fc.innerText || '').trim();
-                  const mC = txtC.match(/\b(15|30|45|60|75)\b/);
-                  if (mC) return parseInt(mC[0], 10);
-            }
-            return null;
+            // 2) текстовый дублёр Ecwid
+            if (!txt) txt = fc.querySelector('.form-control__select-text')?.textContent?.trim() || '';
+            // 3) последний шанс — весь текст
+            if (!txt) txt = (fc.innerText || '').trim();
+            const m = txt.match(/\b(15|30|45|60|75)\b/);
+            return m ? parseInt(m[1], 10) : null;
       }
-
       function batchCountToIndex(n) { return (n === 15 ? 1 : n === 30 ? 2 : n === 45 ? 3 : n === 60 ? 4 : n === 75 ? 5 : null); }
       function indexToBatchCount(idx) { return ({ 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 })[idx] || null; }
 
@@ -133,266 +83,180 @@
       function findAddButton() {
             return document.querySelector('.details-product-purchase__add-to-bag button.form-control__button');
       }
-
       function priceEls() {
             const span = document.querySelector('.details-product-price__value.ec-price-item');
             const box = document.querySelector('.product-details__product-price.ec-price-item[itemprop="price"]') ||
                   document.querySelector('.product-details__product-price.ec-price-item');
             return { span, box };
       }
-
       function formatUAH(n) {
-            const THIN_NBSP = '\u202F';
             const s = Number(n).toFixed(2);
             const [i, d] = s.split('.');
-            const withThin = i.replace(/\B(?=(\d{3})+(?!\d))/g, THIN_NBSP);
-            return `₴${withThin}.${d}`;
+            const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F'); // узкий неразрывный пробел
+            return `₴${grouped}.${d}`;
       }
 
-      function getRadioList() {
-            for (const nm of RADIO_NAME_CANDIDATES) {
-                  const els = qsAll(`input.form-control__radio[name="${nm}"]`);
-                  if (els.length) return els;
-            }
-            const allRadios = qsAll('input.form-control__radio[name], input[type="radio"][name]');
-            const subset = allRadios.filter(r => {
-                  const n = (r.getAttribute('name') || '').toLowerCase();
-                  return RADIO_NAME_CANDIDATES.some(c => n.includes(c.toLowerCase()));
-            });
-            if (subset.length) return subset;
-
-            const inBlock = qsAll('.product-details__size-item-container input[type="radio"]');
-            if (inBlock.length) return inBlock;
-
-            return [];
-      }
+      // Радиокнопки «Вміст»
       function getCheckedContent() {
-            const list = getRadioList();
-            const checked = list.find(el => el.checked);
+            // пробуем максимально общий селектор
+            let radios = Array.from(document.querySelectorAll('input[type="radio"].form-control__radio'));
+            // сузим по name, если возможно
+            const byName = radios.filter(r => /вміст/i.test(r.getAttribute('name') || ''));
+            if (byName.length) radios = byName;
+            // если всё равно пусто — план Б: строгое имя
+            if (!radios.length) radios = Array.from(document.querySelectorAll(`input.form-control__radio[name="${RADIO_NAME_HINT}"]`));
+            const checked = radios.find(r => r.checked);
             if (!checked) return null;
             const label = document.querySelector(`label[for="${checked.id}"]`)?.textContent?.trim() || checked.value || '';
-            return label.replace(/[«»"]/g, '').trim();
+            return label.replace(/[«»"]/g, '').replace(/\s+/g, ' ').trim();
       }
 
-      // Нормализация и подбор ключа прайса
-      function norm(s) {
-            return (s || '')
-                  .toLowerCase()
-                  .replace(/[«»"'`]/g, '')
-                  .replace(/\u2019/g, "'")
-                  .replace(/\s+/g, ' ')
-                  .trim();
-      }
-      function pickPricingKey(label, pricingKeys) {
-            const want = norm(label);
-            const keysNorm = pricingKeys.map(k => ({ raw: k, n: norm(k) }));
-
-            const has = (t) => want.includes(t);
-
-            if (has('білий') && (has('квас') || has('трип'))) {
-                  const hit = keysNorm.find(k => k.n.includes('білий'));
-                  if (hit) return hit.raw;
-            }
-            if (has('коріандр')) {
-                  const hit = keysNorm.find(k => k.n.includes('коріандр'));
-                  if (hit) return hit.raw;
-            }
-            if (has('квас') || has('трип')) {
-                  const hit = keysNorm.find(k => k.n.includes('квас') && !k.n.includes('білий') && !k.n.includes('коріандр'));
-                  if (hit) return hit.raw;
-            }
-            if (has('шипшин')) {
-                  const hit = keysNorm.find(k => k.n.includes('шипшин'));
-                  if (hit) return hit.raw;
-            }
-            if (has('журавлин')) {
-                  const hit = keysNorm.find(k => k.n.includes('журавлин'));
-                  if (hit) return hit.raw;
-            }
-            if (has('матус')) {
-                  const hit = keysNorm.find(k => k.n.includes('матус'));
-                  if (hit) return hit.raw;
-            }
-            if (has('чоловіч')) {
-                  const hit = keysNorm.find(k => k.n.includes('чоловіч'));
-                  if (hit) return hit.raw;
-            }
-            if (has('класич')) {
-                  const hit = keysNorm.find(k => k.n.includes('класич'));
-                  if (hit) return hit.raw;
-            }
-
-            const eq = keysNorm.find(k => k.n === want);
-            if (eq) return eq.raw;
-
-            const sub = keysNorm.find(k => k.n.includes(want) || want.includes(k.n));
-            if (sub) return sub.raw;
-
+      // Нормализация к канону для таблицы цен
+      function canonLabel(lblRaw) {
+            const t = (lblRaw || '').toLowerCase();
+            if (/класич/i.test(t) || /класіч/i.test(t)) return 'Класичний';
+            if (/чоловіч/i.test(t)) return 'Чоловіча Сила';
+            if (/матусин|матусине/i.test(t)) return "Матусине здоров'я";
+            if (/шипшин/i.test(t)) return 'Шипшина';
+            if (/журавлин/i.test(t)) return 'Журавлина';
+            if (/білий|біле/i.test(t)) return 'Квас трипільський (білий)';
+            if (/коріандр/i.test(t)) return 'Квас трипільський з коріандром';
+            if (/квас/i.test(t)) return 'Квас трипільський';
             return null;
       }
 
-      // Вспомогательное: извлечь индекс партии из SKU (…-1..5)
-      function skuBatchIndex(sku) {
-            const m = (sku || '').match(/-(\d)$/);
+      // SKU → batchIndex из корзины
+      function extractBatchIdxFromSku(sku) {
+            const m = String(sku || '').match(/ПОЛІСОЛ-[A-ZА-ЯІЇЄҐ]+-(\d)$/i);
             return m ? parseInt(m[1], 10) : null;
       }
-      function skuIsFamily(sku) {
-            return !!(sku || '').startsWith(FAMILY_PREFIX);
+      function getCartBatchIdx(cart) {
+            const idxs = (cart.items || []).map(it => extractBatchIdxFromSku(it.sku)).filter(v => v != null);
+            return idxs.length ? idxs[0] : null; // считаем корзину однородной по партии
       }
 
-      // === Vue-приложение (без «блокировок» dropdown)
+      // === Vue виджет ===
       function mountApp(pricing) {
             const { createApp, ref, computed, onMounted } = Vue;
 
-            // якорь под таблицу
+            // Место для таблички набора
             let host = document.getElementById('cpc-polisol-summary');
             if (!host) {
                   host = document.createElement('div');
                   host.id = 'cpc-polisol-summary';
                   host.style.marginTop = '10px';
-                  const desc = document.getElementById('productDescription');
-                  if (desc) desc.appendChild(host);
+                  document.getElementById('productDescription')?.appendChild(host);
             }
 
             const app = createApp({
                   setup() {
                         const originalPriceText = ref(null);
-                        const batchIndex = ref(null);  // 1..5
                         const unitPrice = ref(0);
-                        const contentLabel = ref('');
                         const cartItems = ref([]);
-
-                        const batchCount = computed(() => batchIndex.value ? indexToBatchCount(batchIndex.value) : null);
+                        const batchIndex = ref(null);
 
                         function updatePriceUI() {
                               const { span, box } = priceEls();
                               if (!span) return;
-
                               if (!originalPriceText.value) originalPriceText.value = span.textContent;
-
-                              const nextText = unitPrice.value
-                                    ? formatUAH(unitPrice.value)
-                                    : originalPriceText.value;
-
-                              if (span.textContent === nextText) return; // анти-мигание
-
-                              span.textContent = nextText;
-                              if (box) {
-                                    const numeric = unitPrice.value ? String(unitPrice.value) : '';
-                                    box.setAttribute('content', numeric);
+                              if (unitPrice.value) {
+                                    span.textContent = formatUAH(unitPrice.value);
+                                    if (box) box.setAttribute('content', String(unitPrice.value));
+                              } else {
+                                    if (originalPriceText.value) span.textContent = originalPriceText.value;
                               }
                         }
 
-                        async function refreshUnitPrice() {
+                        function refreshUnitPrice() {
                               const bCount = readBatchCount();
                               const idx = bCount ? batchCountToIndex(bCount) : null;
-
                               batchIndex.value = idx;
-
                               const lbl = getCheckedContent();
-                              contentLabel.value = lbl || '';
+                              const canon = lbl ? canonLabel(lbl) : null;
 
-                              if (idx && lbl) {
-                                    const pKey = pickPricingKey(lbl, Object.keys(pricing.pricing));
-                                    if (pKey) {
-                                          const row = pricing.pricing[pKey];
-                                          unitPrice.value = row ? (row[idx - 1] || 0) : 0;
-                                    } else {
-                                          unitPrice.value = 0;
-                                    }
+                              if (idx && canon && pricing?.pricing?.[canon]) {
+                                    const priceRow = pricing.pricing[canon];
+                                    unitPrice.value = priceRow[idx - 1] || 0;
                               } else {
                                     unitPrice.value = 0;
                               }
-
                               updatePriceUI();
-                        }
-
-                        function renderCartTable(items) { cartItems.value = items; }
-                        function sumForItems(items) { return items.reduce((a, it) => a + (it.price * it.quantity), 0); }
-
-                        function skuMatchesOurBatch(sku, idx) {
-                              if (!sku) return false;
-                              return new RegExp(`^${FAMILY_PREFIX.replace('-', '\\-')}.+\\-${idx}$`).test(sku);
                         }
 
                         function fetchCartAndRender() {
                               Ecwid.Cart.get(function (cart) {
                                     const idx = batchIndex.value;
-                                    if (!idx) { renderCartTable([]); return; }
-                                    const ours = (cart.items || []).filter(it => skuMatchesOurBatch(it.sku, idx));
-                                    renderCartTable(ours.map((it, i) => ({
-                                          n: i + 1, name: it.name, quantity: it.quantity, price: it.price, sum: it.quantity * it.price
-                                    })));
+                                    if (!idx) { cartItems.value = []; return; }
+                                    const ours = (cart.items || []).filter(it => extractBatchIdxFromSku(it.sku) === idx);
+                                    cartItems.value = ours.map((it, i) => ({
+                                          n: i + 1,
+                                          name: it.name,
+                                          quantity: it.quantity,
+                                          price: it.price,
+                                          sum: it.quantity * it.price
+                                    }));
                               });
                         }
+
+                        function sumForItems(items) { return items.reduce((a, it) => a + it.sum, 0); }
+                        const total = computed(() => formatUAH(sumForItems(cartItems.value)));
 
                         function attachAddToCartInterceptor() {
                               if (window.__cpc_add_hooked) return;
                               const btn = findAddButton(); if (!btn) return;
 
-                              document.addEventListener('click', async (e) => {
+                              document.addEventListener('click', (e) => {
                                     const b = e.target.closest('.details-product-purchase__add-to-bag button.form-control__button');
                                     if (!b) return;
                                     if (!isTargetProduct()) return;
 
                                     e.preventDefault(); e.stopPropagation();
 
-                                    const idx = batchIndex.value;
-                                    if (!idx) { return alert('Оберіть партію спочатку.'); }
+                                    const bCount = readBatchCount();
+                                    const idx = bCount ? batchCountToIndex(bCount) : null;
+                                    if (!idx) return alert('Оберіть партію спочатку.');
 
                                     const lbl = getCheckedContent();
-                                    if (!lbl) { return alert('Оберіть «Вміст».'); }
+                                    if (!lbl) return alert('Оберіть «Вміст».');
 
                                     const qtyInp = findQtyInput();
                                     const qty = Math.max(1, parseInt((qtyInp?.value || '1'), 10) || 1);
 
-                                    // Проверяем корзину на конфликт партий
-                                    Ecwid.Cart.get(async function (cart) {
-                                          const items = (cart.items || []).filter(it => skuIsFamily(it.sku));
-                                          const presentIdx = new Set(items.map(it => skuBatchIndex(it.sku)).filter(Boolean));
-
-                                          if (presentIdx.size > 0 && (!presentIdx.has(idx) || presentIdx.size > 1)) {
-                                                // В корзине есть служебные товары другой партии
-                                                const human = (i) => indexToBatchCount(i) || '?';
-                                                const existing = Array.from(presentIdx).map(human).join(', ');
-                                                const chosen = human(idx);
-                                                alert(
-                                                      `У кошику вже є товари для іншої партії ( ${existing} ).\n` +
-                                                      `Ви обрали партію ${chosen}. Видаліть, будь ласка, позиції іншої партії з кошика та спробуйте ще раз.`
+                                    Ecwid.Cart.get(function (cart) {
+                                          const existingIdx = getCartBatchIdx(cart);
+                                          if (existingIdx && existingIdx !== idx) {
+                                                const ok = window.confirm(
+                                                      `У кошику вже є товари з іншої партії (${indexToBatchCount(existingIdx)}).\n` +
+                                                      `Очистити кошик і додати для партії ${indexToBatchCount(idx)}?`
                                                 );
-                                                return; // не добавляем
+                                                if (!ok) return;
+                                                return Ecwid.Cart.clear(() => actuallyAdd(lbl, idx, qty));
                                           }
-
-                                          // лимит по сумме партии (для текущего суффикса партии)
-                                          const batchMax = indexToBatchCount(idx);
-                                          const current = items
-                                                .filter(it => skuMatchesOurBatch(it.sku, idx))
-                                                .reduce((acc, it) => acc + it.quantity, 0);
-                                          const remaining = batchMax - current;
-                                          if (qty > remaining) {
-                                                return alert(`Перевищено ліміт партії (${batchMax}). Доступно ще: ${remaining}.`);
-                                          }
-
-                                          try {
-                                                const payload = { contentLabel: lbl, batchIndex: idx }; // суффикс варианта сервер определит сам
-                                                const r = await fetch(QUOTE_ENDPOINT, {
-                                                      method: 'POST',
-                                                      headers: { 'Content-Type': 'application/json' },
-                                                      body: JSON.stringify(payload)
-                                                });
-                                                const data = await r.json();
-                                                if (!r.ok || !data.ok) throw new Error(data?.error || r.statusText);
-
-                                                Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () {
-                                                      fetchCartAndRender();
-                                                });
-                                          } catch (err) {
-                                                alert(`Помилка серверу: ${err?.message || err}`);
-                                          }
+                                          actuallyAdd(lbl, idx, qty);
                                     });
                               }, true);
 
                               window.__cpc_add_hooked = true;
+                        }
+
+                        async function actuallyAdd(lbl, idx, qty) {
+                              try {
+                                    const r = await fetch(QUOTE_ENDPOINT, {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ contentLabel: lbl, batchIndex: idx })
+                                    });
+                                    const data = await r.json().catch(() => ({}));
+                                    if (!r.ok || !data.ok) {
+                                          const msg = data?.message || data?.error || r.statusText || 'Unknown server error';
+                                          throw new Error(msg);
+                                    }
+                                    Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () {
+                                          fetchCartAndRender();
+                                    });
+                              } catch (err) {
+                                    alert(`Помилка серверу: ${err?.message || err}`);
+                              }
                         }
 
                         function observeOptionChanges() {
@@ -400,24 +264,20 @@
                                     document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') ||
                                     document.querySelector('.ec-store, .ecwid-productBrowser') ||
                                     document.body;
-                              let timer = null;
                               const mo = new MutationObserver(() => {
-                                    clearTimeout(timer);
-                                    timer = setTimeout(() => { refreshUnitPrice(); }, 60);
+                                    refreshUnitPrice();
                               });
                               mo.observe(root, { childList: true, subtree: true });
                         }
 
                         onMounted(() => {
                               refreshUnitPrice();
-                              attachAddToCartInterceptor();
-                              observeOptionChanges();
-
-                              Ecwid.OnCartChanged.add(fetchCartAndRender);
                               fetchCartAndRender();
+                              Ecwid.OnCartChanged.add(fetchCartAndRender);
+                              observeOptionChanges();
+                              attachAddToCartInterceptor();
                         });
 
-                        const total = computed(() => formatUAH(sumForItems(cartItems.value)));
                         return { cartItems, total, formatUAH };
                   },
                   template: `
@@ -458,28 +318,19 @@
             app.mount('#cpc-polisol-summary');
       }
 
-      // === Bootstrap ===
+      // === Bootstrap: на продукте нашей семьи ===
       waitEcwid(() => {
             Ecwid.OnAPILoaded.add(() => {
-                  Ecwid.OnPageLoaded.add(async page => {
-                        if (page.type !== 'PRODUCT') return;
-
-                        if (!isTargetProduct()) {
-                              const host = document.getElementById('cpc-polisol-summary');
-                              if (host) host.remove();
-                              return;
-                        }
-
-                        if (window.__cpc_vue_pid === page.productId) return;
-                        window.__cpc_vue_pid = page.productId;
-
+                  Ecwid.OnPageLoaded.add(async (page) => {
+                        if (page.type !== 'PRODUCT' || !isTargetProduct()) return;
                         try {
-                              const res = await fetch(PRICING_ENDPOINT, { cache: 'no-store' });
+                              await ensureVue();
+                              const res = await fetch(PRICING_ENDPOINT);
                               const pricing = await res.json();
                               if (!pricing?.ok) throw new Error('pricing not ok');
-                              ensureVue(() => mountApp(pricing));
+                              mountApp(pricing);
                         } catch (e) {
-                              console.error('[cpc] Failed to load pricing or Vue', e);
+                              console.error('POLISOL init failed', e);
                         }
                   });
             });
