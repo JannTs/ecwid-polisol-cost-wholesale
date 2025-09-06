@@ -1,5 +1,6 @@
-/* POLISOL widget v2025-09-06-10 */
+/* POLISOL widget v2025-09-06-10 ready */
 /* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (safe for canvas) */
+console.info('POLISOL widget v2025-09-06-10 ready');
 (() => {
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
