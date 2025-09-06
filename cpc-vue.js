@@ -1,11 +1,11 @@
-/* POLISOL widget v2025-09-06-24  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-24)
-   - Прогресс-бар перенесён на место .product-details-module__title.ec-header-h6
-   - Таблица «Підсумок кошика POLISOL» наполняется стабильно: ждём обновлённую корзину после addProduct
-   - Кнопка «Оформити замовлення» остаётся в инлайн-панели и показывается только при 100%
+/* POLISOL widget v2025-09-06-25  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-25)
+   - FIX: options могут быть {} → безопасный парсинг (arrays/objects)
+   - FIX: имя/sku берем из item.product.* если нет на верхнем уровне
+   - Таблица стабильно заполняется; прогресс-бар на месте заголовка модуля
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-24 ready');
+      console.info('POLISOL widget v2025-09-06-25 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -29,11 +29,9 @@
 
       // --- Ecwid helpers
       function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
-      function fetchCart() {
-            return new Promise((resolve) => { try { Ecwid.Cart.get((cart) => resolve(cart || { items: [] })); } catch (_) { resolve({ items: [] }); } });
-      }
+      function fetchCart() { return new Promise((resolve) => { try { Ecwid.Cart.get((cart) => resolve(cart || { items: [] })); } catch (_) { resolve({ items: [] }); } }); }
 
-      // ожидаем фактическое изменение корзины (по fingerprint)
+      // --- Fingerprint wait
       async function waitForCartChange(prevFP, tries = 10, delay = 300) {
             for (let i = 0; i < tries; i++) {
                   const cart = await fetchCart();
@@ -41,13 +39,12 @@
                   if (fp !== prevFP) return cart;
                   await new Promise(r => setTimeout(r, delay));
             }
-            // таймаут — вернём последнее состояние
             return await fetchCart();
       }
 
-      // --- Item utils
-      const itemSku = (it) => (it && (it.sku || it.productSku || it.product?.sku) || '').toString();
-      const itemName = (it) => (it && (it.name || it.product?.name) || '').toString();
+      // --- Item utils (robust)
+      const itemSku = (it) => (it?.sku || it?.productSku || it?.product?.sku || '').toString();
+      const itemName = (it) => (it?.name || it?.product?.name || '').toString();
       function isPolisolItem(it) {
             const skuU = itemSku(it).toUpperCase();
             const nameU = itemName(it).toUpperCase();
@@ -126,16 +123,30 @@
             return null;
       }
       function getItemContentLabel(it) {
-            const optLists = [it?.options, it?.selectedOptions, it?.product?.options].filter(Boolean);
-            for (const list of optLists) {
-                  for (const o of list) {
+            // поддержка arrays/objects
+            const lists = [];
+            const pushList = (val) => {
+                  if (!val) return;
+                  if (Array.isArray(val)) lists.push(val);
+                  else if (typeof val === 'object') lists.push(Object.values(val));
+            };
+            pushList(it?.options);
+            pushList(it?.selectedOptions);
+            pushList(it?.product?.options);
+            pushList(it?.product?.selectedOptions);
+
+            for (const list of lists) {
+                  for (const o of (Array.isArray(list) ? list : [])) {
                         const name = String(o?.name || '').toLowerCase();
-                        if (name.includes('вміст')) {
-                              const v = removeQuotes(o?.value || ''); if (v) return v;
+                        if (name.includes('вміст') || name.includes('content') || name.includes('содерж')) {
+                              const v = removeQuotes(o?.value || '');
+                              if (v) return v;
                         }
                   }
             }
-            const name = String(it?.name || ''); const m = name.match(/«([^»]+)»/);
+            // из названия товара (product.name)
+            const name = itemName(it);
+            const m = name.match(/«([^»]+)»/);
             if (m && m[1]) return removeQuotes(m[1]);
             return canonContent(name) || '';
       }
@@ -249,6 +260,7 @@
             return host;
       }
       function inferCanonFromName(name) { const n = String(name || ''); const m = n.match(/«([^»]+)»/); if (m && m[1]) return removeQuotes(m[1]); return canonContent(n) || ''; }
+
       function cartFingerprint(items, lock) {
             const fam = (items || []).filter(isPolisolItem);
             const li = (lock && lock.batchIndex) ? String(lock.batchIndex) : '0';
@@ -256,6 +268,7 @@
             for (const it of fam) { parts.push(itemSku(it) + ':' + (it.quantity || 0) + ':' + (getUnitPrice(it, lock) || 0)); }
             return parts.join('|');
       }
+
       function renderCartSummarySync(cart) {
             const host = ensureSummaryContainer(); const body = host.querySelector('#polisol-body');
             const items = (cart && cart.items) || []; const fam = items.filter(isPolisolItem);
@@ -268,15 +281,20 @@
             if (!fam.length) { body.textContent = 'Кошик порожній для POLISOL.'; return; }
 
             let rows = '', total = 0;
-            fam.forEach((it, i) => {
-                  const idx = i + 1;
-                  const canon = getItemContentLabel(it) || inferCanonFromName(it.name || '') || '—';
-                  const label = `ПОЛІСОЛ™«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
-                  const qty = Number(it.quantity || 0);
-                  const unit = getUnitPrice(it, lock);
-                  const sum = unit * qty; total += sum;
-                  rows += `<tr><td>${idx}</td><td>${label}</td><td class="polisol-td-right">${qty} банок</td><td class="polisol-td-right">${formatUAH(unit)}</td><td class="polisol-td-right">${formatUAH(sum)}</td></tr>`;
-            });
+            for (let i = 0; i < fam.length; i++) {
+                  const it = fam[i];
+                  try {
+                        const idx = i + 1;
+                        const canon = getItemContentLabel(it) || inferCanonFromName(itemName(it)) || '—';
+                        const label = `ПОЛІСОЛ™«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
+                        const qty = Number(it.quantity || 0);
+                        const unit = getUnitPrice(it, lock);
+                        const sum = unit * qty; total += sum;
+                        rows += `<tr><td>${idx}</td><td>${label}</td><td class="polisol-td-right">${qty} банок</td><td class="polisol-td-right">${formatUAH(unit)}</td><td class="polisol-td-right">${formatUAH(sum)}</td></tr>`;
+                  } catch (ex) {
+                        console.warn('[POLISOL] row render failed:', ex, it);
+                  }
+            }
 
             body.innerHTML = `
       <table class="polisol-table">
@@ -285,9 +303,10 @@
         <tfoot><tr class="polisol-row-total"><td></td><td>Сума разом</td><td></td><td></td><td class="polisol-td-right">${formatUAH(total)}</td></tr></tfoot>
       </table>`;
       }
+
       async function renderCartSummary() { try { const cart = await fetchCart(); renderCartSummarySync(cart); } catch (_) { } }
 
-      // --- INLINE panel: edit + hint + checkout (без самого прогресс-бара)
+      // --- INLINE panel (редакт + подсказка + чек-аут при 100%)
       function ensureInlinePanel() {
             let panel = document.getElementById('polisol-inline'); if (panel) return panel;
             const addBtn = document.querySelector('.details-product-purchase__add-to-bag button.form-control__button');
@@ -315,15 +334,14 @@
             host = document.createElement('div'); host.id = 'polisol-progress-host'; host.className = 'polisol-progress polisol-progress--header';
             host.innerHTML = `<div class="polisol-progress__bar" id="polisol-progress-bar-header"></div>`;
             title.parentNode.insertBefore(host, title);
-            // скрыть сам заголовок
             title.style.display = 'none';
             return host;
       }
 
       const inlineFingerprint = (limit, currentQty) => 'L' + (limit || 0) + '|Q' + (currentQty || 0);
       async function renderInlineAndHeader(optionalCart) {
-            const panel = ensureInlinePanel(); // может быть null до загрузки узлов
-            const header = ensureHeaderProgress(); // может быть null на некоторых темах
+            const panel = ensureInlinePanel();
+            const header = ensureHeaderProgress();
             const hint = panel?.querySelector('#polisol-hint');
             const rowCh = panel?.querySelector('#polisol-checkout-row');
             const barH = document.getElementById('polisol-progress-bar-header');
