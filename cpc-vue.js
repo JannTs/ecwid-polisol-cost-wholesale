@@ -1,13 +1,12 @@
-/* POLISOL widget v2025-09-06-21  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-21)
-   - Таблица «Підсумок кошика POLISOL» без мерцаний, корректный «Вміст», цены и суммы.
-   - Инлайн-панель после Add to Bag: «Редагувати кошик», «Залишилось N з M», прогресс-бар,
-     «Оформити замовлення» (только при 100%).
-   - Фиксация ТОЛЬКО размера партії; смешивание «Вмістів» разрешено до лимита.
-   - quote → contentLabel; анти-даблклик; failsafe addProduct; бережный MutationObserver.
+/* POLISOL widget v2025-09-06-22  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-22)
+   Фиксы:
+   - Вернул отсутствующую функцию renderCartSummary() → нет ReferenceError.
+   - Не очищаю lock при пост-рендерных ошибках (чтобы не ловить "є товар без lock").
+   - Без мерцаний, таблица/панель обновляются только при реальных изменениях.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-21 ready');
+      console.info('POLISOL widget v2025-09-06-22 ready');
 
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -30,11 +29,11 @@
             currentSku: null,
             isTargetMemo: null,
             cssInjected: false,
-            summaryFP: null,   // fingerprint для таблицы
-            inlineFP: null     // fingerprint для инлайн-панели
+            summaryFP: null,
+            inlineFP: null
       });
 
-      // === Lock (фиксируем ТОЛЬКО размер партії) ===
+      // === Lock ===
       const LOCK_KEY = 'POLISOL_LOCK';
       const getLock = () => { try { return JSON.parse(sessionStorage.getItem(LOCK_KEY) || 'null'); } catch (_) { return null; } };
       const setLock = (o) => { try { sessionStorage.setItem(LOCK_KEY, JSON.stringify(o)); } catch (_) { } };
@@ -85,7 +84,13 @@
       }
 
       // === Batch helpers ===
-      function extractAllowedNumber(str, allowed) { const a = String(str || ''); let curr = ''; for (let i = 0; i < a.length; i++) { const ch = a[i]; if (ch >= '0' && ch <= '9') curr += ch; else if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; curr = ''; } } if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; } return null; }
+      function extractAllowedNumber(str, allowed) {
+            const a = String(str || ''); let curr = ''; for (let i = 0; i < a.length; i++) {
+                  const ch = a[i];
+                  if (ch >= '0' && ch <= '9') curr += ch; else if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; curr = ''; }
+            }
+            if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; } return null;
+      }
       function findBatchControl() {
             const selects = Array.from(document.querySelectorAll('.form-control__select'));
             for (const s of selects) { const opts = Array.from(s.options || []).map(o => o.textContent || '').join(' '); if (extractAllowedNumber(opts, [15, 30, 45, 60, 75]) != null) return s.closest('.form-control') || null; }
@@ -115,7 +120,6 @@
             return null;
       }
       function getItemContentLabel(it) {
-            // 1) Из опций корзины: ищем опцию «Вміст»
             const optLists = [it?.options, it?.selectedOptions, it?.product?.options].filter(Boolean);
             for (const list of optLists) {
                   for (const o of list) {
@@ -126,11 +130,9 @@
                         }
                   }
             }
-            // 2) Из названия между «...» 
             const name = String(it?.name || '');
             const m = name.match(/«([^»]+)»/);
             if (m && m[1]) return removeQuotes(m[1]);
-            // 3) Грубая эвристика
             return canonContent(name) || '';
       }
       function getUnitPrice(it) {
@@ -291,6 +293,12 @@
         </tfoot>
       </table>`;
       }
+      async function renderCartSummary() {
+            try {
+                  const cart = await fetchCart();
+                  renderCartSummarySync(cart);
+            } catch (_) { /* noop */ }
+      }
 
       // === INLINE PANEL after Add to Bag ===
       function ensureInlinePanel() {
@@ -313,13 +321,10 @@
         <a href="#!/checkout" class="ec-button ec-button--primary" id="polisol-checkout" aria-label="Оформити замовлення">Оформити замовлення</a>
       </div>
     `;
-            // вставляем СРАЗУ ПОСЛЕ кнопки Add to Bag
             addBtn.parentNode.insertBefore(panel, addBtn.nextSibling);
             return panel;
       }
-      function inlineFingerprint(limit, currentQty) {
-            return 'L' + (limit || 0) + '|Q' + (currentQty || 0);
-      }
+      const inlineFingerprint = (limit, currentQty) => 'L' + (limit || 0) + '|Q' + (currentQty || 0);
       async function renderInlinePanel(optionalCart) {
             const panel = ensureInlinePanel(); if (!panel) return;
             const hint = panel.querySelector('#polisol-hint');
@@ -332,7 +337,6 @@
             const lock = getLock();
             const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex(uiCount) : null;
 
-            // Лимит: если есть lock — берём из него; иначе — по текущему выбору UI
             const idx = (lock && lock.batchIndex) ? lock.batchIndex : (uiIdx || null);
             const limit = idx ? batchLimitByIndex(idx) : null;
             const currentQty = sumFamilyQty(items);
@@ -341,7 +345,6 @@
             __cpc.inlineFP = fp;
 
             if (!limit) {
-                  // пока не выбран/не зафиксирован размер партии — показываем только «Редагувати кошик»
                   if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
                   if (pbar) pbar.style.display = 'none';
                   if (rowCh) rowCh.style.display = 'none';
@@ -377,11 +380,14 @@
             e.preventDefault(); e.stopPropagation();
             if (__cpc.adding) return; __cpc.adding = true;
 
-            let preLocked = false;
+            let lockSetThisClick = false;
+            let added = false;
+
             try {
                   const { idx, canon } = refreshUnitPrice();
                   if (!idx) { alert('Оберіть розмір партії.'); return; }
                   if (!canon) { alert('Оберіть «Вміст».'); return; }
+
                   const contentKey = (() => {
                         switch (canon) {
                               case 'Класичний': return 'classic';
@@ -407,7 +413,7 @@
                   if (lock) {
                         if (String(lock.batchIndex) !== String(idx)) { const lim = batchLimitByIndex(lock.batchIndex); alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.'); return; }
                   } else {
-                        setLock({ batchIndex: idx }); preLocked = true; lock = getLock();
+                        setLock({ batchIndex: idx }); lockSetThisClick = true; lock = getLock();
                   }
 
                   const limit = batchLimitByIndex(lock.batchIndex);
@@ -423,12 +429,14 @@
                         new Promise((resolve) => { try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, function () { resolve('cb'); }); } catch (_) { resolve('catch'); } }),
                         new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000))
                   ]);
-                  if (result === 'timeout') console.warn('[POLISOL] addProduct callback timeout');
+                  // даже при timeout добавление обычно произошло — считаем, что добавлено
+                  added = (result === 'cb' || result === 'timeout' || result === 'catch');
 
                   await renderCartSummary();
-                  await renderInlinePanel(cart); // обновим панель на основе уже известной корзины
+                  await renderInlinePanel();
             } catch (err) {
-                  if (preLocked) clearLock();
+                  // очищаем lock только если мы ставили его в этом клике и добавление точно НЕ произошло
+                  if (lockSetThisClick && !added) clearLock();
                   alert('Помилка серверу: ' + (err?.message || err));
             } finally {
                   __cpc.adding = false;
@@ -458,7 +466,6 @@
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
                         refreshUnitPrice();
-                        // панель могла исчезнуть при перерисовке темы — убедимся, что она на месте
                         ensureInlinePanel();
                   });
             });
@@ -503,7 +510,7 @@
                         ensureSummaryContainer();
                         ensureInlinePanel();
                         await renderCartSummary();
-                        await renderInlinePanel(); // основано на текущем UI/lock
+                        await renderInlinePanel();
                         refreshUnitPrice();
                   });
             });
