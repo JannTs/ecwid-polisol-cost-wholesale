@@ -1,24 +1,30 @@
-// server/api/polisol/quote.post.ts
 import { defineEventHandler, readBody, setResponseHeader, createError } from 'h3';
-import { EcwidClient } from '../../../utils/ecwid';
+import { EcwidClient } from '~~/utils/ecwid';
 import {
   toCanonLabel,
   unitPrice,
   BATCH_INDEX_TO_COUNT,
   isKvas,
   SUFFIX_BY_CONTENT,
-} from '../../../utils/polisol';
+} from '~~/utils/polisol';
 
 const FAMILY_PREFIX = 'ПОЛІСОЛ-';
 
-// Формат имени по требованиям:
-// - для ПОЛІСОЛ™: "ПОЛІСОЛ™ «<Вміст>» (ціна в партії <N>)"
-// - для квасу:    "<Вміст> (ціна в партії <N>)"
+// ASCII-ключи для CLI/интеграций без кириллицы
+const KEY_TO_CANON: Record<string, string> = {
+  classic: 'Класичний',
+  mans: 'Чоловіча Сила',
+  mother: "Матусине Здоров'я",
+  rosehip: 'Шипшина',
+  cranberry: 'Журавлина',
+  kvas: 'Квас трипільський',
+  kvas_white: 'Квас трипільський (білий)',
+  kvas_coriander: 'Квас трипільський з коріандром',
+};
+
 function buildProductName(humanLabel: string, batchCount: number, kvas: boolean): string {
-  if (kvas) {
-    return `${humanLabel} (ціна в партії ${batchCount})`;
-  }
-  // гарантируем пробел между ™ и «
+  if (kvas) return `${humanLabel} (ціна в партії ${batchCount})`;
+  // гарантируем пробел между ™ и «»
   const quoted = humanLabel.match(/[«»]/) ? humanLabel : `«${humanLabel}»`;
   return `ПОЛІСОЛ™ ${quoted} (ціна в партії ${batchCount})`;
 }
@@ -39,32 +45,36 @@ export default defineEventHandler(async (event) => {
 
   const body = await readBody<{
     contentLabel?: string;
+    contentKey?: string; // <- ASCII альтернативa
     batchIndex?: number; // 1..5
   }>(event);
 
-  const humanLabel = (body?.contentLabel || '').trim();
-  const idx = Number(body?.batchIndex || 0);
+  // Выбираем label либо по contentKey
+  let humanLabel = (body?.contentLabel || '').trim();
+  if (!humanLabel && body?.contentKey) {
+    const key = String(body.contentKey).trim().toLowerCase();
+    if (KEY_TO_CANON[key]) humanLabel = KEY_TO_CANON[key];
+  }
 
+  const idx = Number(body?.batchIndex || 0);
   if (!humanLabel || !idx || idx < 1 || idx > 5) {
     throw createError({
       statusCode: 400,
       statusMessage: 'Bad Request',
-      message: 'Missing or invalid contentLabel / batchIndex',
+      message: 'Missing or invalid contentLabel/contentKey or batchIndex',
     });
   }
 
-  // Канонизация и суффикс
-  const canon = toCanonLabel(humanLabel); // нормализованный ключ
+  const canon = toCanonLabel(humanLabel);
   const suffix = SUFFIX_BY_CONTENT[canon];
   if (!suffix) {
     throw createError({
       statusCode: 400,
       statusMessage: 'Bad Request',
-      message: `Unknown contentLabel: ${humanLabel}`,
+      message: `Unknown content: ${humanLabel}`,
     });
   }
 
-  // Цена за единицу
   const price = unitPrice(canon, idx);
   if (price <= 0) {
     throw createError({
@@ -74,71 +84,58 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const batchCount = BATCH_INDEX_TO_COUNT[idx]; // 15/30/45/60/75
+  const batchCount = BATCH_INDEX_TO_COUNT[idx]; // 15..75
   const sku = `${FAMILY_PREFIX}${suffix}-${idx}`;
+  const name = buildProductName(humanLabel, batchCount, isKvas(canon));
 
-  // Готовим Ecwid client
   const client = new EcwidClient(String(NUXT_ECWID_STORE_ID), String(NUXT_ECWID_TOKEN));
   const categoryId =
     Number(
       NUXT_ECWID_WHOLESALE_CATEGORY_ID || NUXT_ECWID_TECH_CATEGORY_ID || NUXT_ECWID_CATEGORY_ID || 0
     ) || undefined;
 
-  // Имя товара по правилам
-  const name = buildProductName(humanLabel, batchCount, isKvas(canon));
+  try {
+    // 1) Ищем по SKU
+    const existing = await client.findFirstProductBySku(sku);
 
-  // === ИДЕМПОТЕНТНОСТЬ ПО SKU ===
-  // 1) Ищем существующий товар с таким SKU
-  const existing = await client.findFirstProductBySku(sku);
+    if (existing) {
+      const patch: any = {};
+      if (existing.name !== name) patch.name = name;
+      if (Number(existing.price) !== Number(price)) patch.price = price;
+      if (
+        categoryId &&
+        (!Array.isArray(existing.categoryIds) || existing.categoryIds[0] !== categoryId)
+      ) {
+        patch.categoryIds = [categoryId];
+      }
+      if (Object.keys(patch).length) await client.updateProduct(existing.id, patch);
 
-  if (existing) {
-    // 2) Если найден, при необходимости обновим имя, цену, категорию
-    const patch: any = {};
-    if (existing.name !== name) patch.name = name;
-    if (Number(existing.price) !== Number(price)) patch.price = price;
-    if (
-      categoryId &&
-      (!Array.isArray(existing.categoryIds) || existing.categoryIds[0] !== categoryId)
-    ) {
-      patch.categoryIds = [categoryId];
+      return { ok: true, productId: existing.id, unitPrice: price, batchIndex: idx, batchCount };
     }
 
-    if (Object.keys(patch).length > 0) {
-      await client.updateProduct(existing.id, patch);
-    }
-
-    return {
-      ok: true,
-      productId: existing.id,
-      unitPrice: price,
-      batchIndex: idx,
-      batchCount,
+    // 2) Создаём новый
+    const payload: any = {
+      name,
+      sku,
+      price,
+      enabled: true,
+      description: `<p>Оптова ціна для партії <b>${batchCount}</b> шт. Вміст: <b>${humanLabel}</b>.</p>`,
+      attributes: [
+        { name: 'Партія', value: String(batchCount) },
+        { name: 'Вміст', value: humanLabel },
+      ],
     };
+    if (categoryId) payload.categoryIds = [categoryId];
+
+    const created = await client.createProduct(payload);
+    return { ok: true, productId: created.id, unitPrice: price, batchIndex: idx, batchCount };
+  } catch (e: any) {
+    // Пробрасываем подробности наружу (в т.ч. 403 от Ecwid)
+    const statusGuess = Number(e?._status) || 502;
+    throw createError({
+      statusCode: statusGuess,
+      statusMessage: 'Ecwid API error',
+      message: String(e?.message || e || 'Ecwid error'),
+    });
   }
-
-  // 3) Если нет — создаём новый
-  const payload: any = {
-    sku,
-    name,
-    price,
-    enabled: true,
-    // необязательные поля по вкусу:
-    // unlimited: true,
-    // trackInventory: false,
-    // manageStock: false,
-  };
-  if (categoryId) payload.categoryIds = [categoryId];
-
-  // (опционально) описание — компактное
-  payload.description = `<p>Оптова ціна для партії <b>${batchCount}</b> шт. Вміст: <b>${humanLabel}</b>.</p>`;
-
-  const created = await client.createProduct(payload);
-
-  return {
-    ok: true,
-    productId: created.id,
-    unitPrice: price,
-    batchIndex: idx,
-    batchCount,
-  };
 });

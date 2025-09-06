@@ -1,51 +1,95 @@
 // utils/ecwid.ts
-import { $fetch } from 'ofetch';
-
 export class EcwidClient {
   private storeId: string;
   private token: string;
-  private apiBase: string;
 
   constructor(storeId: string, token: string) {
     this.storeId = String(storeId);
-    this.token = token;
-    this.apiBase = `https://app.ecwid.com/api/v3/${this.storeId}`;
+    this.token = String(token);
   }
 
-  private async request<T>(path: string, opts: any = {}): Promise<T> {
-    const url = `${this.apiBase}${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(this.token)}`;
-    return await $fetch<T>(url, {
-      method: opts.method || 'GET',
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
+  // Диагностичный вызов: шлём и Authorization: Bearer, и ?token=
+  // и возвращаем подробную ошибку (код + тело Ecwid).
+  private async call(path: string, opts: RequestInit = {}) {
+    const base = `https://app.ecwid.com/api/v3/${this.storeId}`;
+    const url =
+      `${base}${path}` +
+      (path.includes('?') ? '&' : '?') +
+      `token=${encodeURIComponent(this.token)}`;
+
+    const res = await fetch(url, {
+      ...opts,
       headers: {
         'Content-Type': 'application/json',
+        // parallel: Ecwid понимает и Bearer, и ?token=
+        Authorization: `Bearer ${this.token}`,
         ...(opts.headers || {}),
       },
     });
+
+    const text = await res.text().catch(() => '');
+    if (!res.ok) {
+      // Попробуем вынуть сообщение Ecwid
+      let details = text;
+      try {
+        const j = JSON.parse(text);
+        details = j?.errorMessage || j?.message || text;
+      } catch {}
+      const err = new Error(
+        `Ecwid API error ${res.status}: ${res.statusText}${details ? ` — ${details}` : ''}`
+      );
+      // @ts-expect-error добавим поля для верхнего обработчика
+      err._status = res.status;
+      // @ts-expect-error
+      err._body = text;
+      throw err;
+    }
+
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return {};
+    }
   }
 
-  // === Поиск по SKU (возвращает массив) ===
+  // === Поиск по SKU ===
   async findProductsBySku(sku: string): Promise<any[]> {
-    const res: any = await this.request(`/products?sku=${encodeURIComponent(sku)}`);
-    // Ecwid может вернуть либо {items:[...]}, либо массив
-    if (Array.isArray(res)) return res;
-    if (res && Array.isArray(res.items)) return res.items;
+    const data = await this.call(`/products?sku=${encodeURIComponent(sku)}`);
+    if (Array.isArray(data?.items)) return data.items;
+    if (Array.isArray(data)) return data;
     return [];
   }
 
-  // Первый найденный товар по SKU или null
   async findFirstProductBySku(sku: string): Promise<any | null> {
     const list = await this.findProductsBySku(sku);
     return list[0] || null;
   }
 
-  // Создание товара
-  async createProduct(payload: any): Promise<any> {
-    return await this.request('/products', { method: 'POST', body: payload });
+  async createProduct(p: {
+    name: string;
+    sku: string;
+    price: number;
+    description?: string;
+    categoryIds?: number[];
+    attributes?: { name: string; value: string }[];
+    enabled?: boolean;
+  }): Promise<any> {
+    const body = {
+      name: p.name,
+      sku: p.sku,
+      price: p.price,
+      description: p.description || '',
+      enabled: p.enabled ?? true,
+      categoryIds: p.categoryIds || [],
+      attributes: (p.attributes || []).map((a) => ({ name: a.name, value: a.value })),
+    };
+    return await this.call(`/products`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  // Обновление товара (патч по id)
   async updateProduct(productId: number | string, patch: any): Promise<any> {
-    return await this.request(`/products/${productId}`, { method: 'PUT', body: patch });
+    return await this.call(`/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    });
   }
 }
