@@ -1,11 +1,10 @@
-/* POLISOL widget v2025-09-06-25  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-25)
-   - FIX: options могут быть {} → безопасный парсинг (arrays/objects)
-   - FIX: имя/sku берем из item.product.* если нет на верхнем уровне
-   - Таблица стабильно заполняется; прогресс-бар на месте заголовка модуля
+/* POLISOL widget v2025-09-06-26  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-26)
+   - Таблица оформлена ИНЛАЙН-стилями: заголовки по центру, фин.значения справа, «Сума разом» с colspan=4.
+   - Остальной функционал: прогресс-бар в шапке модуля, фиксация партії, запрет смешивания партій, сводка корзины.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-25 ready');
+      console.info('POLISOL widget v2025-09-06-26 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -123,7 +122,6 @@
             return null;
       }
       function getItemContentLabel(it) {
-            // поддержка arrays/objects
             const lists = [];
             const pushList = (val) => {
                   if (!val) return;
@@ -144,7 +142,6 @@
                         }
                   }
             }
-            // из названия товара (product.name)
             const name = itemName(it);
             const m = name.match(/«([^»]+)»/);
             if (m && m[1]) return removeQuotes(m[1]);
@@ -215,33 +212,21 @@
             return { ok: false, error: lastErr };
       }
 
-      // --- Styles
+      // --- Styles (минимум для прогресса; таблица — инлайнами)
       function ensureStyles() {
             if (__cpc.cssInjected) return;
             const css = `
-.ec-card.polisol-summary{margin:16px 0 8px;border:1px solid #e7e7e7;border-radius:12px;overflow:hidden;background:#fff}
-.ec-card__header{padding:12px 16px;font-weight:600;background:#f8f8f8}
-.ec-card__body{padding:8px 0 12px}
-.polisol-table{width:100%;border-collapse:collapse}
-.polisol-table th,.polisol-table td{padding:10px 12px;border-top:1px solid #eee;text-align:left;vertical-align:middle}
-.polisol-table th:first-child,.polisol-table td:first-child{width:44px;text-align:center}
-.polisol-td-right{text-align:right;white-space:nowrap}
-.polisol-row-total td{font-weight:700;border-top:2px solid #ddd}
-.polisol-empty{padding:10px 16px;color:#777}
-
-.polisol-inline{margin-top:10px;display:flex;flex-direction:column;gap:8px}
-.polisol-inline-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.polisol-hint{font-size:14px;color:#555}
-
 .polisol-progress{height:12px;background:#f0f2f5;border-radius:999px;overflow:hidden;border:1px solid #dce1ea}
 .polisol-progress__bar{height:100%;background:linear-gradient(90deg,#2c7be5,#5aa6ff);width:0%;transition:width .25s ease}
 .polisol-progress--header{margin:12px 0}
-
 .ec-button{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:8px;text-decoration:none;border:1px solid transparent;cursor:pointer;font-weight:600}
 .ec-button--primary{background:#2c7be5;color:#fff}
 .ec-button--primary:hover{filter:brightness(.96)}
 .ec-button--ghost{background:#fff;color:#2c7be5;border-color:#d6e4ff}
 .ec-button--ghost:hover{background:#f6f9ff}
+.polisol-inline{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.polisol-inline-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.polisol-hint{font-size:14px;color:#555}
 @media (max-width:480px){.polisol-inline-row{flex-direction:column;align-items:stretch}.ec-button{width:100%}}
 `.trim();
             const style = document.createElement('style'); style.id = 'polisol-style'; style.textContent = css; document.head.appendChild(style);
@@ -252,8 +237,11 @@
       function ensureSummaryContainer() {
             let host = document.getElementById('polisol-cart-summary'); if (host) return host;
             ensureStyles();
-            host = document.createElement('div'); host.id = 'polisol-cart-summary'; host.className = 'ec-card polisol-summary';
-            host.innerHTML = `<div class="ec-card__header">Підсумок кошика POLISOL</div><div class="ec-card__body" id="polisol-body">Кошик порожній для POLISOL.</div>`;
+            host = document.createElement('div'); host.id = 'polisol-cart-summary';
+            host.setAttribute('style', 'margin:16px 0 8px;border:1px solid #e7e7e7;border-radius:12px;overflow:hidden;background:#fff;');
+            host.innerHTML = `
+      <div style="padding:12px 16px;font-weight:600;background:#f8f8f8;">Підсумок кошика</div>
+      <div id="polisol-body" style="padding:8px 0 12px;">Кошик порожній</div>`;
             const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
             if (descr && descr.parentNode) descr.parentNode.insertBefore(host, descr);
             else (document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body).insertBefore(host, document.body.firstChild);
@@ -280,6 +268,15 @@
 
             if (!fam.length) { body.textContent = 'Кошик порожній для POLISOL.'; return; }
 
+            // инлайн-стили
+            const tblStyle = 'width:100%;border-collapse:collapse;';
+            const thStyle = 'padding:10px 12px;border-top:1px solid #eee;text-align:center;vertical-align:middle;';
+            const tdL = 'padding:10px 12px;border-top:1px solid #eee;text-align:left;vertical-align:middle;';
+            const tdC = 'padding:10px 12px;border-top:1px solid #eee;text-align:center;vertical-align:middle;';
+            const tdR = 'padding:10px 12px;border-top:1px solid #eee;text-align:right;white-space:nowrap;vertical-align:middle;';
+            const totalL = 'padding:12px 12px;border-top:2px solid #ddd;font-weight:700;text-align:right;';
+            const totalR = 'padding:12px 12px;border-top:2px solid #ddd;font-weight:700;text-align:right;white-space:nowrap;';
+
             let rows = '', total = 0;
             for (let i = 0; i < fam.length; i++) {
                   const it = fam[i];
@@ -290,17 +287,36 @@
                         const qty = Number(it.quantity || 0);
                         const unit = getUnitPrice(it, lock);
                         const sum = unit * qty; total += sum;
-                        rows += `<tr><td>${idx}</td><td>${label}</td><td class="polisol-td-right">${qty} банок</td><td class="polisol-td-right">${formatUAH(unit)}</td><td class="polisol-td-right">${formatUAH(sum)}</td></tr>`;
+                        rows += `<tr>
+          <td style="${tdC}">${idx}</td>
+          <td style="${tdL}">${label}</td>
+          <td style="${tdR}">${qty} банок</td>
+          <td style="${tdR}">${formatUAH(unit)}</td>
+          <td style="${tdR}">${formatUAH(sum)}</td>
+        </tr>`;
                   } catch (ex) {
                         console.warn('[POLISOL] row render failed:', ex, it);
                   }
             }
 
             body.innerHTML = `
-      <table class="polisol-table">
-        <thead><tr><th>№</th><th>Найменування</th><th class="polisol-td-right">Кількість</th><th class="polisol-td-right">Ціна</th><th class="polisol-td-right">Сума</th></tr></thead>
+      <table style="${tblStyle}">
+        <thead>
+          <tr>
+            <th style="${thStyle}">№</th>
+            <th style="${thStyle}">Найменування</th>
+            <th style="${thStyle}">Кількість</th>
+            <th style="${thStyle}">Ціна</th>
+            <th style="${thStyle}">Сума</th>
+          </tr>
+        </thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr class="polisol-row-total"><td></td><td>Сума разом</td><td></td><td></td><td class="polisol-td-right">${formatUAH(total)}</td></tr></tfoot>
+        <tfoot>
+          <tr>
+            <td colspan="4" style="${totalL}">Сума разом</td>
+            <td style="${totalR}">${formatUAH(total)}</td>
+          </tr>
+        </tfoot>
       </table>`;
       }
 
