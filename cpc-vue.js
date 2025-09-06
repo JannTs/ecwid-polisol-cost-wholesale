@@ -1,12 +1,15 @@
-/* POLISOL widget v2025-09-06-14  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-14)
-   Правки:
-   - Стабильный SKU: запоминаем __cpc.currentSku на OnPageLoaded и используем его в isTargetProduct()
-   - Failsafe для Ecwid.Cart.addProduct: таймаут 4s, чтобы не зависал __cpc.adding
-   - Всё остальное как в v13: единичные обработчики, один MutationObserver + rAF, anti-mix lock
+/* POLISOL widget v2025-09-06-16  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-16)
+   Что внутри:
+   - Фиксация только РОЗМІР ПАРТІЇ (batchIndex) в sessionStorage (без привязки к «Вміст»)
+   - Разрешено добавлять любые «Вміст» в рамках зафиксированной партии
+   - Контроль лимита: сумма quantity всех позиций семейства в корзине <= лимита партии
+   - Если qty добавления > остатка — блокируем с подсказкой, сколько можно ещё
+   - Один MutationObserver + rAF-троттлинг, нормализация ключей прайсинга
+   - Стабильный SKU (мемо), failsafe для addProduct (таймаут 4s), анти-даблклик
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-14 ready');
+      console.info('POLISOL widget v2025-09-06-15 ready');
 
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -26,11 +29,11 @@
             warned: new Set(),
             cartBound: false,
             adding: false,
-            currentSku: null,      // <-- новый мемоизированный SKU
-            isTargetMemo: null     // <-- кэш принадлежности семейству
+            currentSku: null,
+            isTargetMemo: null
       });
 
-      // === Lock (anti-mix) ===
+      // === Lock (anti-mix batches by size only) ===
       const LOCK_KEY = 'POLISOL_LOCK';
       function getLock() { try { return JSON.parse(sessionStorage.getItem(LOCK_KEY) || 'null'); } catch (_) { return null; } }
       function setLock(obj) { try { sessionStorage.setItem(LOCK_KEY, JSON.stringify(obj)); } catch (_) { } }
@@ -48,6 +51,7 @@
       }
       function itemSku(it) { return (it && (it.sku || (it.product && it.product.sku) || it.productSku)) || ''; }
       function cartHasFamily(items) { return (items || []).some((it) => itemSku(it).indexOf(FAMILY_PREFIX) === 0); }
+      function sumFamilyQty(items) { return (items || []).reduce((acc, it) => acc + ((itemSku(it).indexOf(FAMILY_PREFIX) === 0 ? (it.quantity || 0) : 0)), 0); }
 
       // === Misc utils ===
       async function ensureVue() {
@@ -57,7 +61,7 @@
                         const s = document.createElement('script');
                         s.src = 'https://unpkg.com/vue@3/dist/vue.global.prod.js';
                         s.onload = res;
-                        s.onerror = () => res(); // Vue опционален
+                        s.onerror = () => res();
                         document.head.appendChild(s);
                   });
             } catch (_) { }
@@ -70,24 +74,16 @@
       function removeQuotes(s) { return replaceAll(replaceAll(replaceAll(String(s), '«', ''), '»', ''), '"', ''); }
       function normApos(s) {
             let r = String(s || '');
-            r = replaceAll(r, '’', "'"); // U+2019
-            r = replaceAll(r, 'ʼ', "'"); // U+02BC
-            r = replaceAll(r, '′', "'"); // U+2032
-            r = replaceAll(r, '´', "'"); // U+00B4
+            r = replaceAll(r, '’', "'"); r = replaceAll(r, 'ʼ', "'"); r = replaceAll(r, '′', "'"); r = replaceAll(r, '´', "'");
             return r;
       }
       function normalizeKey(s) { return removeQuotes(normApos(String(s))).trim().toLowerCase(); }
 
-      // === Catalog / page detection ===
+      // === Page detection ===
       function getSku() {
             const sels = [
-                  '[itemprop="sku"]',
-                  '.product-details__product-sku',
-                  '[data-product-sku]',
-                  '.product-details__sku',
-                  '.details-product-code__value',
-                  '.ec-store__product-sku',
-                  '.ecwid-productBrowser-sku'
+                  '[itemprop="sku"]', '.product-details__product-sku', '[data-product-sku]',
+                  '.product-details__sku', '.details-product-code__value', '.ec-store__product-sku', '.ecwid-productBrowser-sku'
             ];
             for (const s of sels) {
                   const el = document.querySelector(s);
@@ -102,27 +98,24 @@
             return null;
       }
       function isTargetProduct() {
-            // 1) Если у нас уже есть мемоизированный SKU со страницы — используем его
             if (typeof __cpc.isTargetMemo === 'boolean') return __cpc.isTargetMemo;
             const memo = __cpc.currentSku;
             if (memo) {
                   __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0;
                   return __cpc.isTargetMemo;
             }
-            // 2) Иначе пробуем добыть из DOM, а затем мемоизировать
             const sku = getSku() || '';
             if (sku) { __cpc.currentSku = sku; }
             __cpc.isTargetMemo = sku.indexOf(FAMILY_PREFIX) === 0;
             return __cpc.isTargetMemo;
       }
 
-      // === Batch ("Розмір партії") ===
+      // === Batch helpers ===
       function extractAllowedNumber(str, allowed) {
-            const a = String(str || '');
-            let curr = '';
+            const a = String(str || ''); let curr = '';
             for (let i = 0; i < a.length; i++) {
                   const ch = a[i];
-                  if (ch >= '0' && ch <= '9') { curr += ch; }
+                  if (ch >= '0' && ch <= '9') curr += ch;
                   else if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; curr = ''; }
             }
             if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; }
@@ -146,14 +139,13 @@
             if (!fc) return null;
             const sel = fc.querySelector('.form-control__select');
             if (sel && sel.value && ['Виберіть', 'Выберите', 'Select'].every(x => sel.value.indexOf(x) < 0)) {
-                  const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]);
-                  return v != null ? v : null;
+                  const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]); return v != null ? v : null;
             }
             const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
-            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]);
-            return vv != null ? vv : null;
+            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? vv : null;
       }
-      function batchCountToIndex(n) { return (n === 15 ? 1 : n === 30 ? 2 : n === 45 ? 3 : n === 60 ? 4 : n === 75 ? 5 : null); }
+      function batchCountToIndex(n) { return (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null))))); }
+      function batchLimitByIndex(idx) { return (idx === 1 ? 15 : (idx === 2 ? 30 : (idx === 3 ? 45 : (idx === 4 ? 60 : (idx === 5 ? 75 : null))))); }
 
       // === "Вміст" ===
       function canonContent(label) {
@@ -251,16 +243,14 @@
                   const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button');
                   if (!btn) return;
 
-                  // ВАЖНО: проверяем target до preventDefault
-                  if (!isTargetProduct()) return;
-
+                  if (!isTargetProduct()) return; // проверяем до preventDefault
                   e.preventDefault();
                   e.stopPropagation();
 
                   if (__cpc.adding) return;
                   __cpc.adding = true;
 
-                  let preLocked = false; // ставили ли lock в этом клике до добавления
+                  let preLocked = false; // ставили ли lock в этом клике
 
                   try {
                         const { idx, canon } = refreshUnitPrice();
@@ -277,23 +267,38 @@
                         const hasFam = cartHasFamily(cart.items);
                         let lock = getLock();
 
-                        if (hasFam) {
-                              if (!lock) {
-                                    alert('У кошику вже є товар POLISOL. Щоб уникнути змішування партій, спочатку оформіть поточну партію або очистьте кошик.');
-                                    return;
-                              }
-                              if (String(lock.batchIndex) !== String(idx) || String(lock.contentKey) !== String(contentKey)) {
-                                    alert('У кошику зафіксована партія ' + lock.batchIndex + ' і «' + lock.contentKey + '». Змішування партій заборонено. Оформіть окреме замовлення або очистьте кошик.');
+                        // Если в корзине семейство есть, но lock отсутствует — это "наследие": блокируем
+                        if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Щоб уникнути змішування партій, оформіть поточну партію або очистьте кошик.'); return; }
+
+                        // Если lock есть — партия фиксирована
+                        if (lock) {
+                              if (String(lock.batchIndex) !== String(idx)) {
+                                    const lim = batchLimitByIndex(lock.batchIndex);
+                                    alert('У кошику зафіксована партія на ' + lim + ' шт. Змініть розмір партії або очистьте кошик.');
                                     return;
                               }
                         } else {
-                              if (lock) clearLock();
-                              setLock({ batchIndex: idx, contentKey });
+                              // В корзине семейства нет — фиксируем партию по первому добавлению
+                              setLock({ batchIndex: idx });
                               preLocked = true;
                               lock = getLock();
                         }
 
-                        // Квота
+                        // Контроль лимита партии
+                        const limit = batchLimitByIndex(lock.batchIndex);
+                        const currentQty = sumFamilyQty(cart.items);
+                        const remaining = limit - currentQty;
+
+                        if (remaining <= 0) {
+                              alert('Досягнуто ліміт партії (' + limit + ' шт.). Оформіть замовлення або змініть розмір партії.');
+                              return;
+                        }
+                        if (qty > remaining) {
+                              alert('Можна додати не більше ' + remaining + ' шт. для цієї партії (' + limit + '). Змініть кількість і спробуйте знову.');
+                              return;
+                        }
+
+                        // Запрос квоти (productId под batchIndex + contentKey)
                         const resp = await fetch(QUOTE_ENDPOINT, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
@@ -302,7 +307,7 @@
                         const data = await resp.json();
                         if (!resp.ok || !data.ok) throw new Error(data?.error || resp.statusText);
 
-                        // Добавление в корзину + FAILSAFE таймаут 4s
+                        // Добавление + FAILSAFE 4s
                         const result = await Promise.race([
                               new Promise((resolve) => {
                                     try { Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () { resolve('cb'); }); }
@@ -310,11 +315,9 @@
                               }),
                               new Promise((resolve) => setTimeout(() => resolve('timeout'), 4000))
                         ]);
-                        if (result === 'timeout') {
-                              console.warn('[POLISOL] addProduct callback timeout — продолжили по таймауту');
-                        }
+                        if (result === 'timeout') console.warn('[POLISOL] addProduct callback timeout');
                   } catch (err) {
-                        if (preLocked) clearLock(); // ставили lock до добавления — убираем при ошибке
+                        if (preLocked) clearLock();
                         alert('Помилка серверу: ' + (err?.message || err));
                   } finally {
                         __cpc.adding = false;
@@ -369,14 +372,12 @@
             Ecwid.OnAPILoaded.add(async () => {
                   await ensureVue();
                   Ecwid.OnPageLoaded.add(async (page) => {
-                        // Зафиксируем SKU и принадлежность к семейству один раз на загрузку карточки
                         if (page && page.type === 'PRODUCT') {
                               const sku = getSku();
                               if (sku) __cpc.currentSku = sku;
                               __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0;
                         } else {
-                              __cpc.currentSku = null;
-                              __cpc.isTargetMemo = null;
+                              __cpc.currentSku = null; __cpc.isTargetMemo = null;
                         }
 
                         if (page.type !== 'PRODUCT' || !isTargetProduct()) return;
@@ -388,9 +389,7 @@
 
                               const idxMap = {};
                               const entries = Object.entries(pr.pricing || {});
-                              for (let i = 0; i < entries.length; i++) {
-                                    idxMap[normalizeKey(entries[i][0])] = entries[i][1];
-                              }
+                              for (let i = 0; i < entries.length; i++) idxMap[normalizeKey(entries[i][0])] = entries[i][1];
                               pricingCache = { ...pr, __index: idxMap };
                         } catch (e) {
                               console.error('Failed to load pricing', e);
