@@ -1,52 +1,51 @@
-/* POLISOL widget v2025-09-06-23  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-23)
-   - Таблица снова заполняется (надежный отбор позиций POLISOL + фоллбек цены из pricingCache).
-   - Прогресс-бар заметный (12px, рамка), корректно показывает прогресс.
-   - OnCartChanged -> renderCartSummary() с новым fetchCart().
-   - Прочее поведение без изменений (фиксируем ТОЛЬКО размер партії; смешивать «Вміст» можно до лимита).
+/* POLISOL widget v2025-09-06-24  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-24)
+   - Прогресс-бар перенесён на место .product-details-module__title.ec-header-h6
+   - Таблица «Підсумок кошика POLISOL» наполняется стабильно: ждём обновлённую корзину после addProduct
+   - Кнопка «Оформити замовлення» остаётся в инлайн-панели и показывается только при 100%
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-23 ready');
+      console.info('POLISOL widget v2025-09-06-24 ready');
 
-      // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
       const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
-
-      // === Family/SKU ===
       const FAMILY_PREFIX = 'ПОЛІСОЛ-';
 
-      // === Globals ===
       let pricingCache = null;
       let initialPriceText = null;
+
       const __cpc = (window.__cpc = window.__cpc || {
-            optsBound: false,
-            mo: null,
-            moScheduled: false,
-            warned: new Set(),
-            cartBound: false,
-            adding: false,
-            currentSku: null,
-            isTargetMemo: null,
-            cssInjected: false,
-            summaryFP: null,
-            inlineFP: null
+            optsBound: false, mo: null, moScheduled: false, warned: new Set(),
+            cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
+            cssInjected: false, summaryFP: null, inlineFP: null, headerFP: null
       });
 
-      // === Lock (фиксируем ТОЛЬКО размер партії) ===
+      // --- Lock (фиксируем ТОЛЬКО размер партії)
       const LOCK_KEY = 'POLISOL_LOCK';
       const getLock = () => { try { return JSON.parse(sessionStorage.getItem(LOCK_KEY) || 'null'); } catch (_) { return null; } };
       const setLock = (o) => { try { sessionStorage.setItem(LOCK_KEY, JSON.stringify(o)); } catch (_) { } };
       const clearLock = () => { try { sessionStorage.removeItem(LOCK_KEY); } catch (_) { } };
 
-      // === Ecwid helpers ===
+      // --- Ecwid helpers
       function waitEcwid(cb) { (typeof Ecwid !== 'undefined' && Ecwid.OnAPILoaded) ? cb() : setTimeout(() => waitEcwid(cb), 100); }
       function fetchCart() {
-            return new Promise((resolve) => {
-                  try { Ecwid.Cart.get((cart) => resolve(cart || { items: [] })); }
-                  catch (_) { resolve({ items: [] }); }
-            });
+            return new Promise((resolve) => { try { Ecwid.Cart.get((cart) => resolve(cart || { items: [] })); } catch (_) { resolve({ items: [] }); } });
       }
+
+      // ожидаем фактическое изменение корзины (по fingerprint)
+      async function waitForCartChange(prevFP, tries = 10, delay = 300) {
+            for (let i = 0; i < tries; i++) {
+                  const cart = await fetchCart();
+                  const fp = cartFingerprint(cart.items, getLock());
+                  if (fp !== prevFP) return cart;
+                  await new Promise(r => setTimeout(r, delay));
+            }
+            // таймаут — вернём последнее состояние
+            return await fetchCart();
+      }
+
+      // --- Item utils
       const itemSku = (it) => (it && (it.sku || it.productSku || it.product?.sku) || '').toString();
       const itemName = (it) => (it && (it.name || it.product?.name) || '').toString();
       function isPolisolItem(it) {
@@ -55,22 +54,16 @@
             return (skuU.indexOf(FAMILY_PREFIX) === 0) || nameU.includes('ПОЛІСОЛ') || nameU.includes('POLISOL');
       }
       const cartHasFamily = (items) => (items || []).some(isPolisolItem);
-      const sumFamilyQty = (items) => (items || []).reduce((acc, it) => acc + (isPolisolItem(it) ? (Number(it.quantity) || 0) : 0), 0);
+      const sumFamilyQty = (items) => (items || []).reduce((a, it) => a + (isPolisolItem(it) ? (Number(it.quantity) || 0) : 0), 0);
 
-      // === Utils ===
-      async function ensureVue() {
-            try {
-                  if (typeof window.Vue === 'object' && window.Vue && window.Vue.createApp) return;
-                  await new Promise((res) => { const s = document.createElement('script'); s.src = 'https://unpkg.com/vue@3/dist/vue.global.prod.js'; s.onload = res; s.onerror = () => res(); document.head.appendChild(s); });
-            } catch (_) { }
-      }
+      // --- Utils
       const formatUAH = (n) => { try { return '₴' + Number(n || 0).toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); } catch (_) { return '₴' + (Number(n || 0)).toFixed(2); } };
-      const replaceAll = (src, what, withWhat) => String(src).split(what).join(withWhat);
+      const replaceAll = (s, a, b) => String(s).split(a).join(b);
       const removeQuotes = (s) => replaceAll(replaceAll(replaceAll(String(s), '«', ''), '»', ''), '"', '');
       function normApos(s) { let r = String(s || ''); r = replaceAll(r, '’', "'"); r = replaceAll(r, 'ʼ', "'"); r = replaceAll(r, '′', "'"); r = replaceAll(r, '´', "'"); return r; }
       const normalizeKey = (s) => removeQuotes(normApos(String(s))).trim().toLowerCase();
 
-      // === Page detection ===
+      // --- Page detection
       function getSku() {
             const sels = ['[itemprop="sku"]', '.product-details__product-sku', '[data-product-sku]', '.product-details__sku', '.details-product-code__value', '.ec-store__product-sku', '.ecwid-productBrowser-sku'];
             for (const s of sels) {
@@ -83,15 +76,15 @@
       }
       function isTargetProduct() {
             if (typeof __cpc.isTargetMemo === 'boolean') return __cpc.isTargetMemo;
-            const memo = __cpc.currentSku;
-            if (memo) { __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0; return __cpc.isTargetMemo; }
+            const memo = __cpc.currentSku; if (memo) { __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0; return __cpc.isTargetMemo; }
             const sku = getSku() || ''; if (sku) __cpc.currentSku = sku;
             __cpc.isTargetMemo = sku.indexOf(FAMILY_PREFIX) === 0; return __cpc.isTargetMemo;
       }
 
-      // === Batch helpers ===
+      // --- Batch helpers
       function extractAllowedNumber(str, allowed) {
-            const a = String(str || ''); let curr = ''; for (let i = 0; i < a.length; i++) {
+            const a = String(str || ''); let curr = '';
+            for (let i = 0; i < a.length; i++) {
                   const ch = a[i];
                   if (ch >= '0' && ch <= '9') curr += ch; else if (curr.length) { const v = parseInt(curr, 10); if (allowed.indexOf(v) >= 0) return v; curr = ''; }
             }
@@ -99,30 +92,37 @@
       }
       function findBatchControl() {
             const selects = Array.from(document.querySelectorAll('.form-control__select'));
-            for (const s of selects) { const opts = Array.from(s.options || []).map(o => o.textContent || '').join(' '); if (extractAllowedNumber(opts, [15, 30, 45, 60, 75]) != null) return s.closest('.form-control') || null; }
+            for (const s of selects) {
+                  const opts = Array.from(s.options || []).map(o => o.textContent || '').join(' ');
+                  if (extractAllowedNumber(opts, [15, 30, 45, 60, 75]) != null) return s.closest('.form-control') || null;
+            }
             const controls = Array.from(document.querySelectorAll('.form-control'));
             for (const fc of controls) { const t = (fc.innerText || '').trim(); if (extractAllowedNumber(t, [15, 30, 45, 60, 75]) != null) return fc; }
             return null;
       }
       function readBatchCount() {
-            const fc = findBatchControl(); if (!fc) return null; const sel = fc.querySelector('.form-control__select');
-            if (sel && sel.value && ['Виберіть', 'Выберите', 'Select'].every(x => sel.value.indexOf(x) < 0)) { const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]); return v != null ? v : null; }
-            const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim(); const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? vv : null;
+            const fc = findBatchControl(); if (!fc) return null;
+            const sel = fc.querySelector('.form-control__select');
+            if (sel && sel.value && ['Виберіть', 'Выберите', 'Select'].every(x => sel.value.indexOf(x) < 0)) {
+                  const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]); return v != null ? v : null;
+            }
+            const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
+            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? vv : null;
       }
       const batchCountToIndex = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null)))));
       const batchLimitByIndex = (idx) => (idx === 1 ? 15 : (idx === 2 ? 30 : (idx === 3 ? 45 : (idx === 4 ? 60 : (idx === 5 ? 75 : null)))));
 
-      // === "Вміст" helpers ===
+      // --- "Вміст"
       function canonContent(label) {
             const t = normalizeKey(label); if (!t) return null;
-            if (t.indexOf('білий') >= 0) return 'Квас трипільський (білий)';
-            if (t.indexOf('коріандр') >= 0) return 'Квас трипільський з коріандром';
-            if (t.indexOf('класич') >= 0) return 'Класичний';
-            if (t.indexOf('шипшин') >= 0) return 'Шипшина';
-            if (t.indexOf('журавлин') >= 0) return 'Журавлина';
-            if (t.indexOf('матусин') >= 0 || t.indexOf("матусине здоров'я") >= 0 || t.indexOf('матусине здоров') >= 0) return "Матусине здоров'я";
-            if (t.indexOf('чоловіч') >= 0) return 'Чоловіча Сила';
-            if (t.indexOf('квас') >= 0) return 'Квас трипільський';
+            if (t.includes('білий')) return 'Квас трипільський (білий)';
+            if (t.includes('коріандр')) return 'Квас трипільський з коріандром';
+            if (t.includes('класич')) return 'Класичний';
+            if (t.includes('шипшин')) return 'Шипшина';
+            if (t.includes('журавлин')) return 'Журавлина';
+            if (t.includes('матусин') || t.includes("матусине здоров'я") || t.includes('матусине здоров')) return "Матусине здоров'я";
+            if (t.includes('чоловіч')) return 'Чоловіча Сила';
+            if (t.includes('квас')) return 'Квас трипільський';
             return null;
       }
       function getItemContentLabel(it) {
@@ -131,40 +131,32 @@
                   for (const o of list) {
                         const name = String(o?.name || '').toLowerCase();
                         if (name.includes('вміст')) {
-                              const v = removeQuotes(o?.value || '');
-                              if (v) return v;
+                              const v = removeQuotes(o?.value || ''); if (v) return v;
                         }
                   }
             }
-            const name = String(it?.name || '');
-            const m = name.match(/«([^»]+)»/);
+            const name = String(it?.name || ''); const m = name.match(/«([^»]+)»/);
             if (m && m[1]) return removeQuotes(m[1]);
             return canonContent(name) || '';
       }
+
+      // --- Pricing
       function getUnitPriceFromCache(it, lock) {
             try {
                   if (!pricingCache?.__index || !lock?.batchIndex) return 0;
-                  const canon = canonContent(getItemContentLabel(it) || itemName(it));
-                  if (!canon) return 0;
+                  const canon = canonContent(getItemContentLabel(it) || itemName(it)); if (!canon) return 0;
                   const row = pricingCache.__index[normalizeKey(canon)];
                   const p = row ? Number(row[(lock.batchIndex - 1) | 0]) : 0;
                   return isFinite(p) && p > 0 ? p : 0;
             } catch (_) { return 0; }
       }
       function getUnitPrice(it, lock) {
-            const cand = [
-                  it?.price,
-                  it?.product?.price,
-                  it?.productPrice,
-                  it?.priceWithoutTax,
-                  it?.salePrice,
-                  it?.priceInProductCurrency
-            ];
+            const cand = [it?.price, it?.product?.price, it?.productPrice, it?.priceWithoutTax, it?.salePrice, it?.priceInProductCurrency];
             for (const v of cand) { const n = Number(v); if (isFinite(n) && n > 0) return n; }
             return getUnitPriceFromCache(it, lock);
       }
 
-      // === Цена (UI) ===
+      // --- Price UI
       function priceEls() {
             const span = document.querySelector('.details-product-price__value.ec-price-item');
             const box = document.querySelector('.product-details__product-price.ec-price-item[itemprop="price"]') || document.querySelector('.product-details__product-price.ec-price-item');
@@ -173,24 +165,23 @@
       function setPriceUI(numOrNull) {
             const { span, box } = priceEls(); if (!span) return;
             if (initialPriceText == null) initialPriceText = span.textContent;
-            if (typeof numOrNull === 'number' && Number.isFinite(numOrNull) && numOrNull > 0) { span.textContent = formatUAH(numOrNull); if (box) box.setAttribute('content', String(numOrNull)); }
+            if (typeof numOrNull === 'number' && isFinite(numOrNull) && numOrNull > 0) { span.textContent = formatUAH(numOrNull); if (box) box.setAttribute('content', String(numOrNull)); }
             else { span.textContent = initialPriceText || '€0'; if (box) box.setAttribute('content', '0'); }
       }
       function refreshUnitPrice() {
-            if (!pricingCache || !pricingCache.ok) { setPriceUI(null); return { idx: null, canon: null, price: null }; }
+            if (!pricingCache?.ok) { setPriceUI(null); return { idx: null, canon: null, price: null }; }
             const bCount = readBatchCount(); const idx = bCount ? batchCountToIndex(bCount) : null;
             const radios = Array.from(document.querySelectorAll('input.form-control__radio')); const r = radios.find(x => x.checked);
             const rawLabel = r ? (document.querySelector('label[for="' + r.id + '"]')?.textContent || r.value || '').trim() : null;
             const canon = rawLabel ? canonContent(rawLabel) : null;
-
             if (idx && canon) {
-                  const key = normalizeKey(canon); const row = (pricingCache.__index && pricingCache.__index[key]) || null;
-                  if (!row) { if (!__cpc.warned.has(key)) { console.warn('[POLISOL] price row not found for', canon, 'key=', key, 'available=', Object.keys(pricingCache.__index || {})); __cpc.warned.add(key); } setPriceUI(null); return { idx, canon, price: null }; }
+                  const key = normalizeKey(canon); const row = pricingCache.__index?.[key] || null;
+                  if (!row) { if (!__cpc.warned.has(key)) { console.warn('[POLISOL] price row not found for', canon, 'key=', key); __cpc.warned.add(key); } setPriceUI(null); return { idx, canon, price: null }; }
                   const price = row[(idx - 1) | 0] || 0; setPriceUI(price); return { idx, canon, price };
             } else { setPriceUI(null); return { idx: idx || null, canon: canon || null, price: null }; }
       }
 
-      // === Robust quote (contentLabel first) ===
+      // --- Quote
       async function requestQuote({ canon, contentKey, idx }) {
             const attempts = [
                   { payload: { contentLabel: canon, batchIndex: idx }, tag: 'contentLabel' },
@@ -204,50 +195,57 @@
                   try {
                         const resp = await fetch(QUOTE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                         let data = null, text = ''; try { data = await resp.json(); } catch (_) { try { text = await resp.text(); } catch (__) { } }
-                        if (!resp.ok || !data || data.ok === false || !data.productId) { const msg = (data && (data.message || data.error || data.err || data.detail)) || text || resp.statusText || 'Unknown error'; lastErr = { status: resp.status, tag, msg, data }; console.warn('[POLISOL] quote failed (' + tag + '):', lastErr); }
-                        else { console.info('[POLISOL] quote success via', tag, '→ productId:', data.productId); return { ok: true, productId: data.productId }; }
-                  } catch (e) { lastErr = { status: 0, tag, msg: e?.message || String(e) }; console.warn('[POLISOL] quote exception (' + tag + '):', lastErr); }
+                        if (!resp.ok || !data || data.ok === false || !data.productId) {
+                              const msg = (data && (data.message || data.error || data.err || data.detail)) || text || resp.statusText || 'Unknown error';
+                              lastErr = { status: resp.status, tag, msg, data }; console.warn('[POLISOL] quote failed(' + tag + '):', lastErr);
+                        } else { return { ok: true, productId: data.productId }; }
+                  } catch (e) { lastErr = { status: 0, tag, msg: e?.message || String(e) }; }
             }
             return { ok: false, error: lastErr };
       }
 
-      // === CART SUMMARY (ecwid-like) ===
-      function ensureSummaryStyles() {
+      // --- Styles
+      function ensureStyles() {
             if (__cpc.cssInjected) return;
             const css = `
-.ec-card.polisol-summary { margin: 16px 0 8px; border: 1px solid #e7e7e7; border-radius: 12px; overflow: hidden; background: #fff; }
-.ec-card__header { padding: 12px 16px; font-weight: 600; background: #f8f8f8; }
-.ec-card__body { padding: 8px 0 12px; }
-.polisol-table { width: 100%; border-collapse: collapse; }
-.polisol-table th, .polisol-table td { padding: 10px 12px; border-top: 1px solid #eee; text-align: left; vertical-align: middle; }
-.polisol-table th:first-child, .polisol-table td:first-child { width: 44px; text-align: center; }
-.polisol-td-right { text-align: right; white-space: nowrap; }
-.polisol-row-total td { font-weight: 700; border-top: 2px solid #ddd; }
-.polisol-empty { padding: 10px 16px; color: #777; }
-.polisol-inline { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
-.polisol-inline-row { display:flex; gap:10px; flex-wrap: wrap; align-items: center; }
-.polisol-hint { font-size: 14px; color: #555; }
-.polisol-progress { height: 12px; background: #f0f2f5; border-radius: 999px; overflow: hidden; border: 1px solid #dce1ea; }
-.polisol-progress__bar { height: 100%; background: linear-gradient(90deg, #2c7be5, #5aa6ff); width: 0%; transition: width .25s ease; }
+.ec-card.polisol-summary{margin:16px 0 8px;border:1px solid #e7e7e7;border-radius:12px;overflow:hidden;background:#fff}
+.ec-card__header{padding:12px 16px;font-weight:600;background:#f8f8f8}
+.ec-card__body{padding:8px 0 12px}
+.polisol-table{width:100%;border-collapse:collapse}
+.polisol-table th,.polisol-table td{padding:10px 12px;border-top:1px solid #eee;text-align:left;vertical-align:middle}
+.polisol-table th:first-child,.polisol-table td:first-child{width:44px;text-align:center}
+.polisol-td-right{text-align:right;white-space:nowrap}
+.polisol-row-total td{font-weight:700;border-top:2px solid #ddd}
+.polisol-empty{padding:10px 16px;color:#777}
 
-.ec-button { display:inline-flex; align-items:center; justify-content:center; padding:10px 14px; border-radius:8px; text-decoration:none; border:1px solid transparent; cursor:pointer; font-weight:600; }
-.ec-button--primary { background:#2c7be5; color:#fff; }
-.ec-button--primary:hover { filter:brightness(0.96); }
-.ec-button--ghost { background:#fff; color:#2c7be5; border-color:#d6e4ff; }
-.ec-button--ghost:hover { background:#f6f9ff; }
-@media (max-width: 480px){ .polisol-inline-row { flex-direction: column; align-items: stretch; } .ec-button { width:100%; } }
-    `.trim();
-            const style = document.createElement('style'); style.id = 'polisol-cart-summary-style'; style.textContent = css; document.head.appendChild(style);
+.polisol-inline{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.polisol-inline-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.polisol-hint{font-size:14px;color:#555}
+
+.polisol-progress{height:12px;background:#f0f2f5;border-radius:999px;overflow:hidden;border:1px solid #dce1ea}
+.polisol-progress__bar{height:100%;background:linear-gradient(90deg,#2c7be5,#5aa6ff);width:0%;transition:width .25s ease}
+.polisol-progress--header{margin:12px 0}
+
+.ec-button{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:8px;text-decoration:none;border:1px solid transparent;cursor:pointer;font-weight:600}
+.ec-button--primary{background:#2c7be5;color:#fff}
+.ec-button--primary:hover{filter:brightness(.96)}
+.ec-button--ghost{background:#fff;color:#2c7be5;border-color:#d6e4ff}
+.ec-button--ghost:hover{background:#f6f9ff}
+@media (max-width:480px){.polisol-inline-row{flex-direction:column;align-items:stretch}.ec-button{width:100%}}
+`.trim();
+            const style = document.createElement('style'); style.id = 'polisol-style'; style.textContent = css; document.head.appendChild(style);
             __cpc.cssInjected = true;
       }
+
+      // --- Summary table
       function ensureSummaryContainer() {
             let host = document.getElementById('polisol-cart-summary'); if (host) return host;
-            ensureSummaryStyles();
+            ensureStyles();
             host = document.createElement('div'); host.id = 'polisol-cart-summary'; host.className = 'ec-card polisol-summary';
             host.innerHTML = `<div class="ec-card__header">Підсумок кошика POLISOL</div><div class="ec-card__body" id="polisol-body">Кошик порожній для POLISOL.</div>`;
             const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
-            if (descr && descr.parentNode) { descr.parentNode.insertBefore(host, descr); }
-            else { const container = document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body; container.insertBefore(host, container.firstChild); }
+            if (descr && descr.parentNode) descr.parentNode.insertBefore(host, descr);
+            else (document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body).insertBefore(host, document.body.firstChild);
             return host;
       }
       function inferCanonFromName(name) { const n = String(name || ''); const m = n.match(/«([^»]+)»/); if (m && m[1]) return removeQuotes(m[1]); return canonContent(n) || ''; }
@@ -259,21 +257,15 @@
             return parts.join('|');
       }
       function renderCartSummarySync(cart) {
-            const host = ensureSummaryContainer();
-            const body = host.querySelector('#polisol-body');
-            const items = (cart && cart.items) || [];
-            const fam = items.filter(isPolisolItem);
-            const lock = getLock();
-            const limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
+            const host = ensureSummaryContainer(); const body = host.querySelector('#polisol-body');
+            const items = (cart && cart.items) || []; const fam = items.filter(isPolisolItem);
+            const lock = getLock(); const limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
 
             const fp = cartFingerprint(items, lock);
             if (__cpc.summaryFP === fp) return;
             __cpc.summaryFP = fp;
 
-            if (!fam.length) {
-                  body.textContent = 'Кошик порожній для POLISOL.';
-                  return;
-            }
+            if (!fam.length) { body.textContent = 'Кошик порожній для POLISOL.'; return; }
 
             let rows = '', total = 0;
             fam.forEach((it, i) => {
@@ -283,75 +275,58 @@
                   const qty = Number(it.quantity || 0);
                   const unit = getUnitPrice(it, lock);
                   const sum = unit * qty; total += sum;
-                  rows += `
-        <tr>
-          <td>${idx}</td>
-          <td>${label}</td>
-          <td class="polisol-td-right">${qty} банок</td>
-          <td class="polisol-td-right">${formatUAH(unit)}</td>
-          <td class="polisol-td-right">${formatUAH(sum)}</td>
-        </tr>`;
+                  rows += `<tr><td>${idx}</td><td>${label}</td><td class="polisol-td-right">${qty} банок</td><td class="polisol-td-right">${formatUAH(unit)}</td><td class="polisol-td-right">${formatUAH(sum)}</td></tr>`;
             });
 
             body.innerHTML = `
       <table class="polisol-table">
-        <thead>
-          <tr>
-            <th>№</th>
-            <th>Найменування</th>
-            <th class="polisol-td-right">Кількість</th>
-            <th class="polisol-td-right">Ціна</th>
-            <th class="polisol-td-right">Сума</th>
-          </tr>
-        </thead>
+        <thead><tr><th>№</th><th>Найменування</th><th class="polisol-td-right">Кількість</th><th class="polisol-td-right">Ціна</th><th class="polisol-td-right">Сума</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot>
-          <tr class="polisol-row-total">
-            <td></td>
-            <td>Сума разом</td>
-            <td></td>
-            <td></td>
-            <td class="polisol-td-right">${formatUAH(total)}</td>
-          </tr>
-        </tfoot>
+        <tfoot><tr class="polisol-row-total"><td></td><td>Сума разом</td><td></td><td></td><td class="polisol-td-right">${formatUAH(total)}</td></tr></tfoot>
       </table>`;
       }
-      async function renderCartSummary() {
-            try { const cart = await fetchCart(); renderCartSummarySync(cart); }
-            catch (_) { /* noop */ }
-      }
+      async function renderCartSummary() { try { const cart = await fetchCart(); renderCartSummarySync(cart); } catch (_) { } }
 
-      // === INLINE PANEL after Add to Bag ===
+      // --- INLINE panel: edit + hint + checkout (без самого прогресс-бара)
       function ensureInlinePanel() {
-            let panel = document.getElementById('polisol-inline');
-            if (panel) return panel;
-
+            let panel = document.getElementById('polisol-inline'); if (panel) return panel;
             const addBtn = document.querySelector('.details-product-purchase__add-to-bag button.form-control__button');
             if (!addBtn || !addBtn.parentNode) return null;
-
-            panel = document.createElement('div');
-            panel.id = 'polisol-inline';
-            panel.className = 'polisol-inline';
+            panel = document.createElement('div'); panel.id = 'polisol-inline'; panel.className = 'polisol-inline';
             panel.innerHTML = `
       <div class="polisol-inline-row">
         <a href="#!/cart" class="ec-button ec-button--ghost" id="polisol-edit-cart" aria-label="Редагувати кошик">Редагувати кошик</a>
         <div class="polisol-hint" id="polisol-hint" style="display:none"></div>
       </div>
-      <div class="polisol-progress" id="polisol-progress" style="display:none"><div class="polisol-progress__bar" id="polisol-progress-bar"></div></div>
       <div class="polisol-inline-row" id="polisol-checkout-row" style="display:none">
         <a href="#!/checkout" class="ec-button ec-button--primary" id="polisol-checkout" aria-label="Оформити замовлення">Оформити замовлення</a>
-      </div>
-    `;
+      </div>`;
             addBtn.parentNode.insertBefore(panel, addBtn.nextSibling);
             return panel;
       }
+
+      // --- HEADER progress bar (вместо заголовка модуля)
+      function ensureHeaderProgress() {
+            let host = document.getElementById('polisol-progress-host');
+            if (host) return host;
+            ensureStyles();
+            const title = document.querySelector('.product-details-module__title.ec-header-h6');
+            if (!title || !title.parentNode) return null;
+            host = document.createElement('div'); host.id = 'polisol-progress-host'; host.className = 'polisol-progress polisol-progress--header';
+            host.innerHTML = `<div class="polisol-progress__bar" id="polisol-progress-bar-header"></div>`;
+            title.parentNode.insertBefore(host, title);
+            // скрыть сам заголовок
+            title.style.display = 'none';
+            return host;
+      }
+
       const inlineFingerprint = (limit, currentQty) => 'L' + (limit || 0) + '|Q' + (currentQty || 0);
-      async function renderInlinePanel(optionalCart) {
-            const panel = ensureInlinePanel(); if (!panel) return;
-            const hint = panel.querySelector('#polisol-hint');
-            const pbar = panel.querySelector('#polisol-progress');
-            const bar = panel.querySelector('#polisol-progress-bar');
-            const rowCh = panel.querySelector('#polisol-checkout-row');
+      async function renderInlineAndHeader(optionalCart) {
+            const panel = ensureInlinePanel(); // может быть null до загрузки узлов
+            const header = ensureHeaderProgress(); // может быть null на некоторых темах
+            const hint = panel?.querySelector('#polisol-hint');
+            const rowCh = panel?.querySelector('#polisol-checkout-row');
+            const barH = document.getElementById('polisol-progress-bar-header');
 
             const cart = optionalCart || await fetchCart();
             const items = cart.items || [];
@@ -362,36 +337,28 @@
             const limit = idx ? batchLimitByIndex(idx) : null;
             const currentQty = sumFamilyQty(items);
             const fp = inlineFingerprint(limit, currentQty);
-            if (__cpc.inlineFP === fp) return;
-            __cpc.inlineFP = fp;
+            if (__cpc.inlineFP === fp && __cpc.headerFP === fp) return;
+            __cpc.inlineFP = fp; __cpc.headerFP = fp;
 
             if (!limit) {
                   if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
-                  if (pbar) pbar.style.display = 'none';
                   if (rowCh) rowCh.style.display = 'none';
+                  if (header) header.style.display = 'none';
                   return;
             }
 
             const remaining = Math.max(0, limit - currentQty);
             const percent = Math.max(0, Math.min(100, Math.round((currentQty / limit) * 100)));
 
-            if (hint) {
-                  hint.style.display = '';
-                  hint.textContent = `Залишилось ${remaining} з ${limit}`;
-            }
-            if (pbar && bar) {
-                  pbar.style.display = '';
-                  bar.style.width = percent + '%';
-            }
-            if (rowCh) {
-                  rowCh.style.display = (percent >= 100) ? '' : 'none';
-            }
+            if (hint) { hint.style.display = ''; hint.textContent = `Залишилось ${remaining} з ${limit}`; }
+            if (rowCh) { rowCh.style.display = (percent >= 100) ? '' : 'none'; }
+            if (header) { header.style.display = ''; }
+            if (barH) { barH.style.width = percent + '%'; }
       }
 
-      // === Add to Cart interception ===
+      // --- Add to cart interception
       function findQtyInput() {
-            return document.querySelector('.details-product-purchase__qty input[type="number"]')
-                  || document.querySelector('input[type="number"][name="quantity"]');
+            return document.querySelector('.details-product-purchase__qty input[type="number"]') || document.querySelector('input[type="number"][name="quantity"]');
       }
       async function handleAddToBagClick(e) {
             const tgt = e.target; if (!(tgt instanceof Element)) return;
@@ -401,44 +368,28 @@
             e.preventDefault(); e.stopPropagation();
             if (__cpc.adding) return; __cpc.adding = true;
 
-            let lockSetThisClick = false;
-            let added = false;
-
+            let lockSetThisClick = false; let added = false;
             try {
                   const { idx, canon } = refreshUnitPrice();
                   if (!idx) { alert('Оберіть розмір партії.'); return; }
                   if (!canon) { alert('Оберіть «Вміст».'); return; }
 
-                  const contentKey = (() => {
-                        switch (canon) {
-                              case 'Класичний': return 'classic';
-                              case 'Шипшина': return 'rosehip';
-                              case 'Журавлина': return 'cranberry';
-                              case "Матусине здоров'я": return 'matusyne';
-                              case 'Чоловіча Сила': return 'cholovicha';
-                              case 'Квас трипільський': return 'kvas';
-                              case 'Квас трипільський (білий)': return 'kvas_bilyi';
-                              case 'Квас трипільський з коріандром': return 'kvas_koriandr';
-                              default: return null;
-                        }
-                  })();
-                  if (!contentKey) { alert('Невідомий «Вміст» (contentKey).'); return; }
+                  const contentKey = ({ 'Класичний': 'classic', 'Шипшина': 'rosehip', 'Журавлина': 'cranberry', "Матусине здоров'я": 'matusyne', 'Чоловіча Сила': 'cholovicha', 'Квас трипільський': 'kvas', 'Квас трипільський (білий)': 'kvas_bilyi', 'Квас трипільський з коріандром': 'kvas_koriandr' })[canon];
+                  if (!contentKey) { alert('Невідомий «Вміст».'); return; }
 
                   const qty = Math.max(1, parseInt((findQtyInput()?.value || '1'), 10) || 1);
 
-                  const cart = await fetchCart();
-                  const hasFam = cartHasFamily(cart.items);
+                  const beforeCart = await fetchCart(); const beforeFP = cartFingerprint(beforeCart.items, getLock());
+                  const hasFam = cartHasFamily(beforeCart.items);
                   let lock = getLock();
 
                   if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
                   if (lock) {
                         if (String(lock.batchIndex) !== String(idx)) { const lim = batchLimitByIndex(lock.batchIndex); alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.'); return; }
-                  } else {
-                        setLock({ batchIndex: idx }); lockSetThisClick = true; lock = getLock();
-                  }
+                  } else { setLock({ batchIndex: idx }); lockSetThisClick = true; lock = getLock(); }
 
                   const limit = batchLimitByIndex(lock.batchIndex);
-                  const currentQty = sumFamilyQty(cart.items);
+                  const currentQty = sumFamilyQty(beforeCart.items);
                   const remaining = limit - currentQty;
                   if (remaining <= 0) { alert('Досягнуто ліміт партії (' + limit + ' шт.).'); return; }
                   if (qty > remaining) { alert('Можна додати не більше ' + remaining + ' шт. (ліміт ' + limit + ').'); return; }
@@ -447,13 +398,14 @@
                   if (!quo.ok) { const err = quo.error || {}; const status = (err.status != null ? 'HTTP ' + err.status + ' ' : ''); const detail = (typeof err.msg === 'string' ? err.msg : (err.msg == null ? '' : String(err.msg))); alert('Помилка серверу: ' + status + (detail || 'невідома помилка')); return; }
 
                   const result = await Promise.race([
-                        new Promise((resolve) => { try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, function () { resolve('cb'); }); } catch (_) { resolve('catch'); } }),
+                        new Promise((resolve) => { try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, () => resolve('cb')); } catch (_) { resolve('catch'); } }),
                         new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000))
                   ]);
                   added = (result === 'cb' || result === 'timeout' || result === 'catch');
 
-                  await renderCartSummary();
-                  await renderInlinePanel();
+                  const updatedCart = await waitForCartChange(beforeFP, 10, 300);
+                  renderCartSummarySync(updatedCart);
+                  await renderInlineAndHeader(updatedCart);
             } catch (err) {
                   if (lockSetThisClick && !added) clearLock();
                   alert('Помилка серверу: ' + (err?.message || err));
@@ -461,13 +413,9 @@
                   __cpc.adding = false;
             }
       }
-      function attachAddToCart() {
-            if (window.__cpc_add_bound) return;
-            document.addEventListener('click', handleAddToBagClick, true);
-            window.__cpc_add_bound = true;
-      }
+      function attachAddToCart() { if (window.__cpc_add_bound) return; document.addEventListener('click', handleAddToBagClick, true); window.__cpc_add_bound = true; }
 
-      // === Reactivity / observers ===
+      // --- Reactivity / observers
       function bindOptionChange() {
             if (__cpc.optsBound) return;
             document.addEventListener('change', (e) => { if (e.target && e.target.matches && e.target.matches('.form-control__select')) refreshUnitPrice(); }, true);
@@ -477,27 +425,26 @@
       function observeDom() {
             const root = document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.querySelector('.ec-store, .ecwid-productBrowser') || document.body;
             if (__cpc.mo) { try { __cpc.mo.disconnect(); } catch (_) { } }
-            const mo = new MutationObserver((mutations) => {
+            const mo = new MutationObserver((muts) => {
                   const pol = document.getElementById('polisol-cart-summary'); let onlyInside = true;
-                  for (const m of mutations) { const t = m.target; if (!pol || !pol.contains(t)) { onlyInside = false; break; } }
+                  for (const m of muts) { const t = m.target; if (!pol || !pol.contains(t)) { onlyInside = false; break; } }
                   if (onlyInside) return;
                   if (__cpc.moScheduled) return; __cpc.moScheduled = true;
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
                         refreshUnitPrice();
                         ensureInlinePanel();
+                        ensureHeaderProgress();
                   });
             });
-            mo.observe(root, { childList: true, subtree: true });
-            __cpc.mo = mo;
+            mo.observe(root, { childList: true, subtree: true }); __cpc.mo = mo;
       }
       function bindCartGuard() {
             if (__cpc.cartBound) return;
             Ecwid.OnCartChanged.add(async (_cart) => {
                   try {
-                        // всегда подтягиваем актуальный cart из API (в событии может не быть цен и части полей)
                         await renderCartSummary();
-                        await renderInlinePanel();
+                        await renderInlineAndHeader();
                         const items = _cart?.items || [];
                         if (!cartHasFamily(items)) clearLock();
                   } catch (_) { }
@@ -505,23 +452,30 @@
             __cpc.cartBound = true;
       }
 
-      // === Boot ===
-      waitEcwid(async () => {
-            Ecwid.OnAPILoaded.add(async () => {
-                  await ensureVue();
-                  Ecwid.OnPageLoaded.add(async (page) => {
-                        if (page && page.type === 'PRODUCT') {
-                              const sku = getSku(); if (sku) __cpc.currentSku = sku;
-                              __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0;
-                        } else { __cpc.currentSku = null; __cpc.isTargetMemo = null; }
+      // --- Boot
+      function priceIndex(pr) {
+            const idxMap = {}; const ent = Object.entries(pr.pricing || {});
+            for (let i = 0; i < ent.length; i++) idxMap[normalizeKey(ent[i][0])] = ent[i][1];
+            return idxMap;
+      }
 
-                        if (page.type !== 'PRODUCT' || !isTargetProduct()) return;
+      waitEcwid(() => {
+            Ecwid.OnAPILoaded.add(async () => {
+                  Ecwid.OnPageLoaded.add(async (page) => {
+                        if (page && page.type === 'PRODUCT') { const sku = getSku(); if (sku) __cpc.currentSku = sku; __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0; }
+                        else { __cpc.currentSku = null; __cpc.isTargetMemo = null; }
+
+                        if (page?.type !== 'PRODUCT' || !isTargetProduct()) return;
+
+                        ensureStyles();
+                        ensureSummaryContainer();
+                        ensureInlinePanel();
+                        ensureHeaderProgress();
 
                         try {
                               const res = await fetch(PRICING_ENDPOINT); const pr = await res.json();
                               if (!pr?.ok) throw new Error('pricing not ok');
-                              const idxMap = {}; const entries = Object.entries(pr.pricing || {}); for (let i = 0; i < entries.length; i++) { idxMap[normalizeKey(entries[i][0])] = entries[i][1]; }
-                              pricingCache = { ...pr, __index: idxMap };
+                              pricingCache = { ...pr, __index: priceIndex(pr) };
                         } catch (e) { console.error('Failed to load pricing', e); pricingCache = null; }
 
                         bindOptionChange();
@@ -529,10 +483,8 @@
                         bindCartGuard();
                         attachAddToCart();
 
-                        ensureSummaryContainer();
-                        ensureInlinePanel();
                         await renderCartSummary();
-                        await renderInlinePanel();
+                        await renderInlineAndHeader();
                         refreshUnitPrice();
                   });
             });
