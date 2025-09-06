@@ -1,15 +1,14 @@
-/* POLISOL widget v2025-09-06-16  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-16)
-   Что внутри:
-   - Фиксация только РОЗМІР ПАРТІЇ (batchIndex) в sessionStorage (без привязки к «Вміст»)
-   - Разрешено добавлять любые «Вміст» в рамках зафиксированной партии
-   - Контроль лимита: сумма quantity всех позиций семейства в корзине <= лимита партии
-   - Если qty добавления > остатка — блокируем с подсказкой, сколько можно ещё
-   - Один MutationObserver + rAF-троттлинг, нормализация ключей прайсинга
-   - Стабильный SKU (мемо), failsafe для addProduct (таймаут 4s), анти-даблклик
+/* POLISOL widget v2025-09-06-17  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-17)
+   Изменения относительно v16:
+   - /api/polisol/quote теперь в первую очередь получает { contentLabel: canon, batchIndex }
+     (это соответствует сообщению сервера "Missing or invalid contentLabel/contentKey or batchIndex").
+   - Улучшены логи ошибок quote (видно и статус, и текст).
+   - Таймаут failsafe для Ecwid.Cart.addProduct увеличен до 6000 мс (меньше ложных timeout в консоли).
+   - Логика партий остаётся: фиксируем ТОЛЬКО размер партии; смешивать «Вміст» можно, но суммарно ≤ лимита партии.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-15 ready');
+      console.info('POLISOL widget v2025-09-06-17 ready');
 
       // === Endpoints ===
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
@@ -33,7 +32,7 @@
             isTargetMemo: null
       });
 
-      // === Lock (anti-mix batches by size only) ===
+      // === Lock (фиксируем ТОЛЬКО размер партии) ===
       const LOCK_KEY = 'POLISOL_LOCK';
       function getLock() { try { return JSON.parse(sessionStorage.getItem(LOCK_KEY) || 'null'); } catch (_) { return null; } }
       function setLock(obj) { try { sessionStorage.setItem(LOCK_KEY, JSON.stringify(obj)); } catch (_) { } }
@@ -53,7 +52,7 @@
       function cartHasFamily(items) { return (items || []).some((it) => itemSku(it).indexOf(FAMILY_PREFIX) === 0); }
       function sumFamilyQty(items) { return (items || []).reduce((acc, it) => acc + ((itemSku(it).indexOf(FAMILY_PREFIX) === 0 ? (it.quantity || 0) : 0)), 0); }
 
-      // === Misc utils ===
+      // === Utils ===
       async function ensureVue() {
             try {
                   if (typeof window.Vue === 'object' && window.Vue && window.Vue.createApp) return;
@@ -100,12 +99,9 @@
       function isTargetProduct() {
             if (typeof __cpc.isTargetMemo === 'boolean') return __cpc.isTargetMemo;
             const memo = __cpc.currentSku;
-            if (memo) {
-                  __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0;
-                  return __cpc.isTargetMemo;
-            }
+            if (memo) { __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0; return __cpc.isTargetMemo; }
             const sku = getSku() || '';
-            if (sku) { __cpc.currentSku = sku; }
+            if (sku) __cpc.currentSku = sku;
             __cpc.isTargetMemo = sku.indexOf(FAMILY_PREFIX) === 0;
             return __cpc.isTargetMemo;
       }
@@ -228,6 +224,46 @@
             }
       }
 
+      // === Robust quote request (contentLabel first) ===
+      async function requestQuote({ contentKey, canon, idx }) {
+            const attempts = [
+                  { payload: { contentLabel: canon, batchIndex: idx }, tag: 'contentLabel' },
+                  { payload: { contentKey, batchIndex: idx }, tag: 'contentKey' },
+                  { payload: { content: contentKey, batchIndex: idx }, tag: 'content' },
+                  { payload: { label: canon, batchIndex: idx }, tag: 'label' },
+                  { payload: { name: canon, batchIndex: idx }, tag: 'name' },
+            ];
+
+            let lastErr = null;
+            for (let i = 0; i < attempts.length; i++) {
+                  const { payload, tag } = attempts[i];
+                  try {
+                        console.info('[POLISOL] quote attempt:', tag, payload);
+                        const resp = await fetch(QUOTE_ENDPOINT, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(payload)
+                        });
+                        let data = null, text = '';
+                        try { data = await resp.json(); }
+                        catch (_) { try { text = await resp.text(); } catch (__) { } }
+
+                        if (!resp.ok || !data || data.ok === false || !data.productId) {
+                              const msg = (data && (data.message || data.error || data.err || data.detail)) || text || resp.statusText || 'Unknown error';
+                              lastErr = { status: resp.status, tag, msg, data };
+                              console.warn('[POLISOL] quote failed (' + tag + '):', lastErr);
+                        } else {
+                              console.info('[POLISOL] quote success via', tag, '→ productId:', data.productId);
+                              return { ok: true, productId: data.productId };
+                        }
+                  } catch (e) {
+                        lastErr = { status: 0, tag, msg: e?.message || String(e) };
+                        console.warn('[POLISOL] quote exception (' + tag + '):', lastErr);
+                  }
+            }
+            return { ok: false, error: lastErr };
+      }
+
       // === Add to Cart interception ===
       function findQtyInput() {
             return document.querySelector('.details-product-purchase__qty input[type="number"]')
@@ -243,7 +279,7 @@
                   const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button');
                   if (!btn) return;
 
-                  if (!isTargetProduct()) return; // проверяем до preventDefault
+                  if (!isTargetProduct()) return; // до preventDefault
                   e.preventDefault();
                   e.stopPropagation();
 
@@ -267,18 +303,17 @@
                         const hasFam = cartHasFamily(cart.items);
                         let lock = getLock();
 
-                        // Если в корзине семейство есть, но lock отсутствует — это "наследие": блокируем
-                        if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Щоб уникнути змішування партій, оформіть поточну партію або очистьте кошик.'); return; }
+                        // Наследие без lock — блок
+                        if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
 
-                        // Если lock есть — партия фиксирована
+                        // Проверка/установка лока по партии
                         if (lock) {
                               if (String(lock.batchIndex) !== String(idx)) {
                                     const lim = batchLimitByIndex(lock.batchIndex);
-                                    alert('У кошику зафіксована партія на ' + lim + ' шт. Змініть розмір партії або очистьте кошик.');
+                                    alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.');
                                     return;
                               }
                         } else {
-                              // В корзине семейства нет — фиксируем партию по первому добавлению
                               setLock({ batchIndex: idx });
                               preLocked = true;
                               lock = getLock();
@@ -289,31 +324,26 @@
                         const currentQty = sumFamilyQty(cart.items);
                         const remaining = limit - currentQty;
 
-                        if (remaining <= 0) {
-                              alert('Досягнуто ліміт партії (' + limit + ' шт.). Оформіть замовлення або змініть розмір партії.');
-                              return;
-                        }
-                        if (qty > remaining) {
-                              alert('Можна додати не більше ' + remaining + ' шт. для цієї партії (' + limit + '). Змініть кількість і спробуйте знову.');
+                        if (remaining <= 0) { alert('Досягнуто ліміт партії (' + limit + ' шт.).'); return; }
+                        if (qty > remaining) { alert('Можна додати не більше ' + remaining + ' шт. (ліміт ' + limit + ').'); return; }
+
+                        // Получаем productId (contentLabel сначала)
+                        const quo = await requestQuote({ contentKey, canon, idx });
+                        if (!quo.ok) {
+                              const err = quo.error || {};
+                              const status = (err.status != null ? 'HTTP ' + err.status + ' ' : '');
+                              const detail = (typeof err.msg === 'string' ? err.msg : (err.msg == null ? '' : String(err.msg)));
+                              alert('Помилка серверу: ' + status + (detail || 'невідома помилка'));
                               return;
                         }
 
-                        // Запрос квоти (productId под batchIndex + contentKey)
-                        const resp = await fetch(QUOTE_ENDPOINT, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ contentKey, batchIndex: idx })
-                        });
-                        const data = await resp.json();
-                        if (!resp.ok || !data.ok) throw new Error(data?.error || resp.statusText);
-
-                        // Добавление + FAILSAFE 4s
+                        // Добавление + FAILSAFE 6s
                         const result = await Promise.race([
                               new Promise((resolve) => {
-                                    try { Ecwid.Cart.addProduct({ id: data.productId, quantity: qty }, function () { resolve('cb'); }); }
+                                    try { Ecwid.Cart.addProduct({ id: quo.productId, quantity: qty }, function () { resolve('cb'); }); }
                                     catch (_) { resolve('catch'); }
                               }),
-                              new Promise((resolve) => setTimeout(() => resolve('timeout'), 4000))
+                              new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000))
                         ]);
                         if (result === 'timeout') console.warn('[POLISOL] addProduct callback timeout');
                   } catch (err) {
@@ -327,7 +357,7 @@
             window.__cpc_add_bound = true;
       }
 
-      // === Reactivity hooks ===
+      // === Reactivity / observers ===
       function bindOptionChange() {
             if (__cpc.optsBound) return;
             document.addEventListener('change', (e) => {
