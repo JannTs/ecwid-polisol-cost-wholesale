@@ -1,4 +1,4 @@
-/* POLISOL widget v2025-09-06-9 */
+/* POLISOL widget v2025-09-06-10 */
 /* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (guarded observers, throttled) */
 (() => {
       // === Endpoints ===
