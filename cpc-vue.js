@@ -1,15 +1,14 @@
-/* POLISOL widget v2025-09-06-27  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-27)
-   Новое:
-   - Динамический override ecwidMessages['ProductDetails.description_title'] = 'Виберіть партію, вміст та кількість для додавання в кошик'
-     только на карточке POLISOL; на других страницах — возврат дефолта (delete).
-   Наследовано из v26:
-   - Таблица «Підсумок кошика POLISOL» с ИНЛАЙН-стилями, суммы справа, «Сума разом» на всю ширину.
-   - Прогресс-бар вместо .product-details-module__title.ec-header-h6; «Оформити замовлення» только при 100%.
-   - Блокировка смешивания партій; можно смешивать «Вміст» в рамках одной партії до лимита.
+/* POLISOL widget v2025-09-06-28  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-28)
+   Изменения:
+   - Убран прогресс-бар и подсказка «Залишилось…».
+   - Кнопка «Оформити замовлення» показывается ТОЛЬКО когда набрана вся партія.
+   - Динамический override ecwidMessages['ProductDetails.description_title']
+     + DOM-форсаж заголовка описания (возврат дефолта на других страницах).
+   - Таблица «Підсумок кошика POLISOL» — инлайн-стили.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-27 ready');
+      console.info('POLISOL widget v2025-09-06-28 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -22,7 +21,7 @@
       const __cpc = (window.__cpc = window.__cpc || {
             optsBound: false, mo: null, moScheduled: false, warned: new Set(),
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
-            cssInjected: false, summaryFP: null, inlineFP: null, headerFP: null
+            cssInjected: false, summaryFP: null, inlineFP: null
       });
 
       // --- Dynamic Ecwid message override (description title)
@@ -30,12 +29,36 @@
       const ECWID_DESC_TITLE = 'Виберіть партію, вміст та кількість для додавання в кошик';
       function applyDescriptionTitleOverride(enabled) {
             window.ecwidMessages = window.ecwidMessages || {};
-            if (enabled) {
-                  window.ecwidMessages[ECWID_MSG_KEY] = ECWID_DESC_TITLE;
-            } else {
-                  try { delete window.ecwidMessages[ECWID_MSG_KEY]; } catch (_) { }
-            }
+            if (enabled) window.ecwidMessages[ECWID_MSG_KEY] = ECWID_DESC_TITLE;
+            else { try { delete window.ecwidMessages[ECWID_MSG_KEY]; } catch (_) { } }
             try { Ecwid.refreshConfig && Ecwid.refreshConfig(); } catch (_) { }
+      }
+      // DOM fallback: найти заголовок рядом с описанием и заменить
+      function findDescriptionTitleNodes() {
+            const nodes = [];
+            const desc = document.querySelector('#productDescription');
+            if (desc) {
+                  const prev = desc.previousElementSibling;
+                  if (prev && prev.classList && prev.classList.contains('product-details-module__title')) {
+                        nodes.push(prev);
+                  }
+                  const scope = desc.closest('.product-details, .product-details__description, .product-details__product-description, .product-details__product') || desc.parentElement;
+                  if (scope) scope.querySelectorAll('.product-details-module__title').forEach(n => nodes.push(n));
+            }
+            return Array.from(new Set(nodes));
+      }
+      function applyDescriptionTitleDom(enabled, text) {
+            const nodes = findDescriptionTitleNodes();
+            if (!nodes.length) {
+                  console.info('[POLISOL] desc-title: not found');
+                  return;
+            }
+            if (enabled) {
+                  nodes.forEach(n => { n.textContent = text; n.style.display = ''; });
+                  console.info('[POLISOL] desc-title: applied to', nodes.length, 'node(s)');
+            } else {
+                  console.info('[POLISOL] desc-title: skipped (disabled)');
+            }
       }
 
       // --- Lock (фиксируем ТОЛЬКО размер партії)
@@ -230,13 +253,10 @@
             return { ok: false, error: lastErr };
       }
 
-      // --- Styles (минимум для прогресса; таблица — инлайнами)
+      // --- Styles (без прогресса/хинта)
       function ensureStyles() {
             if (__cpc.cssInjected) return;
             const css = `
-.polisol-progress{height:12px;background:#f0f2f5;border-radius:999px;overflow:hidden;border:1px solid #dce1ea}
-.polisol-progress__bar{height:100%;background:linear-gradient(90deg,#2c7be5,#5aa6ff);width:0%;transition:width .25s ease}
-.polisol-progress--header{margin:12px 0}
 .ec-button{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:8px;text-decoration:none;border:1px solid transparent;cursor:pointer;font-weight:600}
 .ec-button--primary{background:#2c7be5;color:#fff}
 .ec-button--primary:hover{filter:brightness(.96)}
@@ -244,7 +264,6 @@
 .ec-button--ghost:hover{background:#f6f9ff}
 .polisol-inline{margin-top:10px;display:flex;flex-direction:column;gap:8px}
 .polisol-inline-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.polisol-hint{font-size:14px;color:#555}
 @media (max-width:480px){.polisol-inline-row{flex-direction:column;align-items:stretch}.ec-button{width:100%}}
 `.trim();
             const style = document.createElement('style'); style.id = 'polisol-style'; style.textContent = css; document.head.appendChild(style);
@@ -339,7 +358,7 @@
 
       async function renderCartSummary() { try { const cart = await fetchCart(); renderCartSummarySync(cart); } catch (_) { } }
 
-      // --- INLINE panel (редакт + подсказка + чек-аут при 100%)
+      // --- INLINE panel (Редагувати кошик + чек-аут при 100%)
       function ensureInlinePanel() {
             let panel = document.getElementById('polisol-inline'); if (panel) return panel;
             const addBtn = document.querySelector('.details-product-purchase__add-to-bag button.form-control__button');
@@ -348,7 +367,6 @@
             panel.innerHTML = `
       <div class="polisol-inline-row">
         <a href="#!/cart" class="ec-button ec-button--ghost" id="polisol-edit-cart" aria-label="Редагувати кошик">Редагувати кошик</a>
-        <div class="polisol-hint" id="polisol-hint" style="display:none"></div>
       </div>
       <div class="polisol-inline-row" id="polisol-checkout-row" style="display:none">
         <a href="#!/checkout" class="ec-button ec-button--primary" id="polisol-checkout" aria-label="Оформити замовлення">Оформити замовлення</a>
@@ -357,27 +375,10 @@
             return panel;
       }
 
-      // --- HEADER progress bar (вместо заголовка модуля)
-      function ensureHeaderProgress() {
-            let host = document.getElementById('polisol-progress-host');
-            if (host) return host;
-            ensureStyles();
-            const title = document.querySelector('.product-details-module__title.ec-header-h6');
-            if (!title || !title.parentNode) return null;
-            host = document.createElement('div'); host.id = 'polisol-progress-host'; host.className = 'polisol-progress polisol-progress--header';
-            host.innerHTML = `<div class="polisol-progress__bar" id="polisol-progress-bar-header"></div>`;
-            title.parentNode.insertBefore(host, title);
-            title.style.display = 'none';
-            return host;
-      }
-
       const inlineFingerprint = (limit, currentQty) => 'L' + (limit || 0) + '|Q' + (currentQty || 0);
-      async function renderInlineAndHeader(optionalCart) {
-            const panel = ensureInlinePanel();
-            const header = ensureHeaderProgress();
-            const hint = panel?.querySelector('#polisol-hint');
-            const rowCh = panel?.querySelector('#polisol-checkout-row');
-            const barH = document.getElementById('polisol-progress-bar-header');
+      async function renderInline(optionalCart) {
+            const panel = ensureInlinePanel(); if (!panel) return;
+            const rowCh = panel.querySelector('#polisol-checkout-row');
 
             const cart = optionalCart || await fetchCart();
             const items = cart.items || [];
@@ -388,23 +389,13 @@
             const limit = idx ? batchLimitByIndex(idx) : null;
             const currentQty = sumFamilyQty(items);
             const fp = inlineFingerprint(limit, currentQty);
-            if (__cpc.inlineFP === fp && __cpc.headerFP === fp) return;
-            __cpc.inlineFP = fp; __cpc.headerFP = fp;
+            if (__cpc.inlineFP === fp) return;
+            __cpc.inlineFP = fp;
 
-            if (!limit) {
-                  if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
-                  if (rowCh) rowCh.style.display = 'none';
-                  if (header) header.style.display = 'none';
-                  return;
-            }
+            if (!limit) { if (rowCh) rowCh.style.display = 'none'; return; }
 
-            const remaining = Math.max(0, limit - currentQty);
             const percent = Math.max(0, Math.min(100, Math.round((currentQty / limit) * 100)));
-
-            if (hint) { hint.style.display = ''; hint.textContent = `Залишилось ${remaining} з ${limit}`; }
             if (rowCh) { rowCh.style.display = (percent >= 100) ? '' : 'none'; }
-            if (header) { header.style.display = ''; }
-            if (barH) { barH.style.width = percent + '%'; }
       }
 
       // --- Add to cart interception
@@ -456,7 +447,7 @@
 
                   const updatedCart = await waitForCartChange(beforeFP, 10, 300);
                   renderCartSummarySync(updatedCart);
-                  await renderInlineAndHeader(updatedCart);
+                  await renderInline(updatedCart);
             } catch (err) {
                   if (lockSetThisClick && !added) clearLock();
                   alert('Помилка серверу: ' + (err?.message || err));
@@ -485,7 +476,7 @@
                         __cpc.moScheduled = false;
                         refreshUnitPrice();
                         ensureInlinePanel();
-                        ensureHeaderProgress();
+                        applyDescriptionTitleDom(isTargetProduct(), ECWID_DESC_TITLE);
                   });
             });
             mo.observe(root, { childList: true, subtree: true }); __cpc.mo = mo;
@@ -495,7 +486,7 @@
             Ecwid.OnCartChanged.add(async (_cart) => {
                   try {
                         await renderCartSummary();
-                        await renderInlineAndHeader();
+                        await renderInline();
                         const items = _cart?.items || [];
                         if (!cartHasFamily(items)) clearLock();
                   } catch (_) { }
@@ -513,24 +504,21 @@
       waitEcwid(() => {
             Ecwid.OnAPILoaded.add(async () => {
                   Ecwid.OnPageLoaded.add(async (page) => {
-                        // определяем, наша ли карточка (POLISOL), и сразу переключаем/возвращаем заголовок описания
+                        // определить карточку POLISOL, применить/снять заголовок описания
                         let isPolisol = false;
                         if (page && page.type === 'PRODUCT') {
                               const sku = getSku(); if (sku) __cpc.currentSku = sku;
                               __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0;
                               isPolisol = !!__cpc.isTargetMemo;
-                        } else {
-                              __cpc.currentSku = null; __cpc.isTargetMemo = null;
-                              isPolisol = false;
-                        }
+                        } else { __cpc.currentSku = null; __cpc.isTargetMemo = null; }
                         applyDescriptionTitleOverride(isPolisol);
+                        applyDescriptionTitleDom(isPolisol, ECWID_DESC_TITLE);
 
                         if (page?.type !== 'PRODUCT' || !isTargetProduct()) return;
 
                         ensureStyles();
                         ensureSummaryContainer();
                         ensureInlinePanel();
-                        ensureHeaderProgress();
 
                         try {
                               const res = await fetch(PRICING_ENDPOINT); const pr = await res.json();
@@ -544,7 +532,7 @@
                         attachAddToCart();
 
                         await renderCartSummary();
-                        await renderInlineAndHeader();
+                        await renderInline();
                         refreshUnitPrice();
                   });
             });
