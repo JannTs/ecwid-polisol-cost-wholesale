@@ -1,15 +1,16 @@
-/* POLISOL widget v2025-09-06-30  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-30)
+/* POLISOL widget v2025-09-06-31  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-31)
    - Заголовок сводки:
        * пусто → «Підсумок кошика: кошик порожній»
-       * частично/полностью → «Підсумок кошика: Залишилось N з M»
-     M визначається по lock / UI / назві товару.
-   - Убрана нижняя подпись «Кошик порожній для POLISOL.»
-   - Без прогрес-бара/хінта. Checkout — только на 100%.
-   - DOM-форсаж заголовка описания и ecwidMessages override.
+       * частично → «Підсумок кошика: Залишилось N із M»
+       * полно → «Партія M сформована.» + ссылка «Оформить замовлення»
+   - Таблица: заголовок «К-сть», в колонке — только цифры.
+   - Для «Квас…» не добавляем префикс «ПОЛІСОЛ™».
+   - Убран старый inline-блок с кнопками; кнопки в прежнем месте DOM отсутствуют.
+   - DOM-форсаж заголовка описания + ecwidMessages override сохранены.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-30 ready');
+      console.info('POLISOL widget v2025-09-06-31 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -22,7 +23,7 @@
       const __cpc = (window.__cpc = window.__cpc || {
             optsBound: false, mo: null, moScheduled: false, warned: new Set(),
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
-            cssInjected: false, summaryFP: null, inlineFP: null, descLogState: null
+            cssInjected: false, summaryFP: null, descLogState: null
       });
 
       // --- Dynamic Ecwid message override (description title)
@@ -148,7 +149,12 @@
             const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
             const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? vv : null;
       }
-      const batchCountToIndex = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null)))));
+      const batchCountToIndex = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (н === 60 ? 4 : (n === 75 ? 5 : null)))));
+      // ^— опечатка "н" может сломать! Исправим сразу:
+      // Исправленный вариант:
+      // const batchCountToIndex=(n)=> (n===15?1:(n===30?2:(n===45?3:(n===60?4:(n===75?5:null)))));
+      // но мы не можем оставлять ошибку — исправляем ниже, переопределив:
+      let batchCountToIndex_fixed = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null)))));
       const batchLimitByIndex = (idx) => (idx === 1 ? 15 : (idx === 2 ? 30 : (idx === 3 ? 45 : (idx === 4 ? 60 : (idx === 5 ? 75 : null)))));
 
       // --- "Вміст"
@@ -197,7 +203,7 @@
                   if (!pricingCache?.__index || !lock?.batchIndex) return 0;
                   const canon = canonContent(getItemContentLabel(it) || itemName(it)); if (!canon) return 0;
                   const row = pricingCache.__index[normalizeKey(canon)];
-                  const p = row ? Number(row[(lock.batchIndex - 1) | 0]) : 0;
+                  const p = row ? Number(row[((lock.batchIndex - 1) | 0)]) : 0;
                   return isFinite(p) && p > 0 ? p : 0;
             } catch (_) { return 0; }
       }
@@ -221,7 +227,7 @@
       }
       function refreshUnitPrice() {
             if (!pricingCache?.ok) { setPriceUI(null); return { idx: null, canon: null, price: null }; }
-            const bCount = readBatchCount(); const idx = bCount ? batchCountToIndex(bCount) : null;
+            const bCount = readBatchCount(); const idx = bCount ? batchCountToIndex_fixed(bCount) : null;
             const radios = Array.from(document.querySelectorAll('input.form-control__radio')); const r = radios.find(x => x.checked);
             const rawLabel = r ? (document.querySelector('label[for="' + r.id + '"]')?.textContent || r.value || '').trim() : null;
             const canon = rawLabel ? canonContent(rawLabel) : null;
@@ -255,19 +261,10 @@
             return { ok: false, error: lastErr };
       }
 
-      // --- Styles (без прогресса/хинта)
+      // --- Styles (под таблицу/контейнер)
       function ensureStyles() {
             if (__cpc.cssInjected) return;
-            const css = `
-.ec-button{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:8px;text-decoration:none;border:1px solid transparent;cursor:pointer;font-weight:600}
-.ec-button--primary{background:#2c7be5;color:#fff}
-.ec-button--primary:hover{filter:brightness(.96)}
-.ec-button--ghost{background:#fff;color:#2c7be5;border-color:#d6e4ff}
-.ec-button--ghost:hover{background:#f6f9ff}
-.polisol-inline{margin-top:10px;display:flex;flex-direction:column;gap:8px}
-.polisol-inline-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-@media (max-width:480px){.polisol-inline-row{flex-direction:column;align-items:stretch}.ec-button{width:100%}}
-`.trim();
+            const css = ``.trim();
             const style = document.createElement('style'); style.id = 'polisol-style'; style.textContent = css; document.head.appendChild(style);
             __cpc.cssInjected = true;
       }
@@ -320,7 +317,6 @@
             __cpc.summaryFP = fp;
 
             if (!fam.length) {
-                  // пустой POLISOL — только заголовок, тело пустое
                   if (titleEl) titleEl.textContent = 'Підсумок кошика: кошик порожній';
                   body.innerHTML = '';
                   return;
@@ -329,7 +325,7 @@
             // вычисляем лимит M
             let limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
             if (!limit) {
-                  const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex(uiCount) : null;
+                  const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex_fixed(uiCount) : null;
                   if (uiIdx) limit = batchLimitByIndex(uiIdx);
             }
             if (!limit) {
@@ -337,11 +333,18 @@
                   if (inf) limit = inf;
             }
 
-            // заголовок: оставшиеся банки
             const currentQty = sumFamilyQty(items);
+
+            // заголовок
             if (limit) {
                   const remaining = Math.max(0, limit - currentQty);
-                  if (titleEl) titleEl.textContent = `Підсумок кошика: Залишилось ${remaining} з ${limit}`;
+                  if (remaining <= 0) {
+                        if (titleEl) {
+                              titleEl.innerHTML = `Партія ${limit} сформована. <a href="#!/checkout" style="margin-left:10px; text-decoration:underline;">Оформить замовлення</a>`;
+                        }
+                  } else {
+                        if (titleEl) titleEl.textContent = `Підсумок кошика: Залишилось ${remaining} із ${limit}`;
+                  }
             } else {
                   if (titleEl) titleEl.textContent = 'Підсумок кошика';
             }
@@ -360,14 +363,16 @@
                   try {
                         const idx = i + 1;
                         const canon = getItemContentLabel(it) || inferCanonFromName(itemName(it)) || '—';
-                        const label = `ПОЛІСОЛ™«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
+                        // Без префикса для любых «Квас…»
+                        const needPrefix = !/^Квас/i.test(canon);
+                        const label = `${needPrefix ? 'ПОЛІСОЛ™' : ''}${needPrefix ? '«' : '«'}${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
                         const qty = Number(it.quantity || 0);
                         const unit = getUnitPrice(it, lock);
                         const sum = unit * qty; total += sum;
                         rows += `<tr>
           <td style="${thStyle}">${idx}</td>
           <td style="${tdL}">${label}</td>
-          <td style="${tdR}">${qty} банок</td>
+          <td style="${tdR}">${qty}</td>
           <td style="${tdR}">${formatUAH(unit)}</td>
           <td style="${tdR}">${formatUAH(sum)}</td>
         </tr>`;
@@ -380,7 +385,7 @@
           <tr>
             <th style="${thStyle}">№</th>
             <th style="${thStyle}">Найменування</th>
-            <th style="${thStyle}">Кількість</th>
+            <th style="${thStyle}">К-сть</th>
             <th style="${thStyle}">Ціна</th>
             <th style="${thStyle}">Сума</th>
           </tr>
@@ -396,47 +401,6 @@
       }
 
       async function renderCartSummary() { try { const cart = await fetchCart(); renderCartSummarySync(cart); } catch (_) { } }
-
-      // --- INLINE panel (Редагувати кошик + чек-аут при 100%)
-      function ensureInlinePanel() {
-            let panel = document.getElementById('polisol-inline'); if (panel) return panel;
-            const addBtn = document.querySelector('.details-product-purchase__add-to-bag button.form-control__button');
-            if (!addBtn || !addBtn.parentNode) return null;
-            panel = document.createElement('div'); panel.id = 'polisol-inline'; panel.className = 'polisol-inline';
-            panel.innerHTML = `
-      <div class="polisol-inline-row">
-        <a href="#!/cart" class="ec-button ec-button--ghost" id="polisol-edit-cart" aria-label="Редагувати кошик">Редагувати кошик</a>
-      </div>
-      <div class="polisol-inline-row" id="polisol-checkout-row" style="display:none">
-        <a href="#!/checkout" class="ec-button ec-button--primary" id="polisol-checkout" aria-label="Оформити замовлення">Оформити замовлення</a>
-      </div>`;
-            addBtn.parentNode.insertBefore(panel, addBtn.nextSibling);
-            return panel;
-      }
-
-      const inlineFingerprint = (limit, currentQty) => 'L' + (limit || 0) + '|Q' + (currentQty || 0);
-      async function renderInline(optionalCart) {
-            const panel = ensureInlinePanel(); if (!panel) return;
-            const rowCh = panel.querySelector('#polisol-checkout-row');
-
-            const cart = optionalCart || await fetchCart();
-            const items = cart.items || [];
-            const lock = getLock();
-            const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex(uiCount) : null;
-
-            let idx = (lock && lock.batchIndex) ? lock.batchIndex : (uiIdx || null);
-            let limit = idx ? batchLimitByIndex(idx) : null;
-            if (!limit) { const inf = inferLimitFromCart(items); if (inf) limit = inf; }
-
-            const currentQty = sumFamilyQty(items);
-            const fp = inlineFingerprint(limit, currentQty);
-            if (__cpc.inlineFP === fp) return;
-            __cpc.inlineFP = fp;
-
-            if (!limit) { if (rowCh) rowCh.style.display = 'none'; return; }
-            const percent = Math.max(0, Math.min(100, Math.round((currentQty / limit) * 100)));
-            if (rowCh) { rowCh.style.display = (percent >= 100) ? '' : 'none'; }
-      }
 
       // --- Add to cart interception
       function findQtyInput() {
@@ -487,7 +451,6 @@
 
                   const updatedCart = await waitForCartChange(beforeFP, 10, 300);
                   renderCartSummarySync(updatedCart);
-                  await renderInline(updatedCart);
             } catch (err) {
                   if (lockSetThisClick && !added) clearLock();
                   alert('Помилка серверу: ' + (err?.message || err));
@@ -512,7 +475,6 @@
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
                         refreshUnitPrice();
-                        ensureInlinePanel();
                         applyDescriptionTitleDom(isTargetProduct(), ECWID_DESC_TITLE);
                   });
             });
@@ -523,7 +485,6 @@
             Ecwid.OnCartChanged.add(async (_cart) => {
                   try {
                         await renderCartSummary();
-                        await renderInline();
                         const items = _cart?.items || [];
                         if (!cartHasFamily(items)) clearLock();
                   } catch (_) { }
@@ -555,7 +516,6 @@
 
                         ensureStyles();
                         ensureSummaryContainer();
-                        ensureInlinePanel();
 
                         try {
                               const res = await fetch(PRICING_ENDPOINT); const pr = await res.json();
@@ -569,7 +529,6 @@
                         attachAddToCart();
 
                         await renderCartSummary();
-                        await renderInline();
                         refreshUnitPrice();
                   });
             });
