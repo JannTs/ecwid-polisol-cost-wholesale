@@ -1,14 +1,15 @@
-/* POLISOL widget v2025-09-06-29  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-29)
-   - Прогресс-бар и «Залишилось…» удалены.
-   - «Оформити замовлення» показываем только при 100% набора партії.
-   - Подмена ProductDetails.description_title через ecwidMessages + улучшенный DOM-форсаж:
-     ищем заголовок описания «по близости» к #productDescription или по тексту ('Деталі', 'Details', 'Опис', 'Описание').
-   - Логи приглушены: не спамим "not found" на каждом мутационном тике.
-   - Таблица «Підсумок кошика POLISOL» — инлайн-стили.
+/* POLISOL widget v2025-09-06-30  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-30)
+   - Заголовок сводки:
+       * пусто → «Підсумок кошика: кошик порожній»
+       * частично/полностью → «Підсумок кошика: Залишилось N з M»
+     M визначається по lock / UI / назві товару.
+   - Убрана нижняя подпись «Кошик порожній для POLISOL.»
+   - Без прогрес-бара/хінта. Checkout — только на 100%.
+   - DOM-форсаж заголовка описания и ecwidMessages override.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-29 ready');
+      console.info('POLISOL widget v2025-09-06-30 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -21,86 +22,45 @@
       const __cpc = (window.__cpc = window.__cpc || {
             optsBound: false, mo: null, moScheduled: false, warned: new Set(),
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
-            cssInjected: false, summaryFP: null, inlineFP: null,
-            descLogState: null
+            cssInjected: false, summaryFP: null, inlineFP: null, descLogState: null
       });
 
       // --- Dynamic Ecwid message override (description title)
       const ECWID_MSG_KEY = 'ProductDetails.description_title';
       const ECWID_DESC_TITLE = 'Виберіть партію, вміст та кількість для додавання в кошик';
-
       function applyDescriptionTitleOverride(enabled) {
             window.ecwidMessages = window.ecwidMessages || {};
             if (enabled) window.ecwidMessages[ECWID_MSG_KEY] = ECWID_DESC_TITLE;
             else { try { delete window.ecwidMessages[ECWID_MSG_KEY]; } catch (_) { } }
             try { Ecwid.refreshConfig && Ecwid.refreshConfig(); } catch (_) { }
       }
-
-      // --- Description title (DOM fallback — умный поиск)
+      // --- Description title DOM-fallback
       const TITLE_SEL = '.product-details-module__title, .product-details-module__title.ec-header-h6';
       const TITLE_TEXT_CANDIDATES = ['Деталі', 'Details', 'Опис', 'Описание', 'Description'];
-
-      function containsDesc(node) {
-            if (!node) return false;
-            if (node.id === 'productDescription') return true;
-            try { return !!node.querySelector?.('#productDescription'); } catch (_) { return false; }
-      }
-
+      function containsDesc(node) { if (!node) return false; if (node.id === 'productDescription') return true; try { return !!node.querySelector?.('#productDescription'); } catch (_) { return false; } }
       function findHeadersByProximity() {
             const headers = Array.from(document.querySelectorAll(TITLE_SEL));
-            const desc = document.getElementById('productDescription');
-            if (!desc || !headers.length) return [];
-            const out = [];
-            for (const h of headers) {
-                  let el = h.nextElementSibling;
-                  while (el) {
-                        if (el.matches?.(TITLE_SEL)) break; // следующий модуль — значит не наш
-                        if (el === desc || containsDesc(el)) { out.push(h); break; }
-                        el = el.nextElementSibling;
-                  }
-            }
+            const desc = document.getElementById('productDescription'); if (!desc || !headers.length) return [];
+            const out = []; for (const h of headers) { let el = h.nextElementSibling; while (el) { if (el.matches?.(TITLE_SEL)) break; if (el === desc || containsDesc(el)) { out.push(h); break; } el = el.nextElementSibling; } }
             return out;
       }
-
-      function findHeadersByText() {
-            const headers = Array.from(document.querySelectorAll(TITLE_SEL));
-            const out = headers.filter(h => {
-                  const t = (h.textContent || '').trim();
-                  return TITLE_TEXT_CANDIDATES.some(x => t.toLowerCase() === x.toLowerCase());
-            });
-            return out;
-      }
-
+      function findHeadersByText() { const headers = Array.from(document.querySelectorAll(TITLE_SEL)); return headers.filter(h => TITLE_TEXT_CANDIDATES.some(x => (h.textContent || '').trim().toLowerCase() === x.toLowerCase())); }
       function findDescriptionTitleNodes() {
-            const set = new Set();
-            // 1) предыдущий брат от #productDescription
-            const desc = document.getElementById('productDescription');
+            const set = new Set(); const desc = document.getElementById('productDescription');
             if (desc) {
-                  const prev = desc.previousElementSibling;
-                  if (prev?.matches?.(TITLE_SEL)) set.add(prev);
-                  // 2) поиск в предках
+                  const prev = desc.previousElementSibling; if (prev?.matches?.(TITLE_SEL)) set.add(prev);
                   const scope = desc.closest('.product-details, .product-details__description, .product-details__product-description, .product-details__product') || desc.parentElement;
                   if (scope) scope.querySelectorAll(TITLE_SEL).forEach(n => set.add(n));
             }
-            // 3) «по близости» (пока не встретим следующий модуль)
             findHeadersByProximity().forEach(n => set.add(n));
-            // 4) по тексту (Деталі/Details/…)
             findHeadersByText().forEach(n => set.add(n));
             return Array.from(set);
       }
-
-      function logDescState(state) {
-            if (__cpc.descLogState === state) return;
-            __cpc.descLogState = state;
-            console.info('[POLISOL] desc-title:', state);
-      }
-
+      function logDescState(state) { if (__cpc.descLogState === state) return; __cpc.descLogState = state; console.info('[POLISOL] desc-title:', state); }
       function applyDescriptionTitleDom(enabled, text) {
             if (!enabled) { logDescState('skipped (disabled)'); return; }
-            const nodes = findDescriptionTitleNodes();
-            if (!nodes.length) { logDescState('not found'); return; }
-            nodes.forEach(n => { n.textContent = text; n.style.display = ''; });
-            logDescState('applied to ' + nodes.length + ' node(s)');
+            const nodes = findDescriptionTitleNodes(); if (!nodes.length) { logDescState('not found'); return; }
+            nodes.forEach(n => { n.textContent = text; n.style.display = ''; }); logDescState('applied to ' + nodes.length + ' node(s)');
       }
 
       // --- Lock (фиксируем ТОЛЬКО размер партії)
@@ -295,7 +255,7 @@
             return { ok: false, error: lastErr };
       }
 
-      // --- Styles (минимум, без прогресса/хинта)
+      // --- Styles (без прогресса/хинта)
       function ensureStyles() {
             if (__cpc.cssInjected) return;
             const css = `
@@ -312,21 +272,35 @@
             __cpc.cssInjected = true;
       }
 
-      // --- Summary table
+      // --- Summary container
       function ensureSummaryContainer() {
             let host = document.getElementById('polisol-cart-summary'); if (host) return host;
             ensureStyles();
             host = document.createElement('div'); host.id = 'polisol-cart-summary';
             host.setAttribute('style', 'margin:16px 0 8px;border:1px solid #e7e7e7;border-radius:12px;overflow:hidden;background:#fff;');
             host.innerHTML = `
-      <div style="padding:12px 16px;font-weight:600;background:#f8f8f8;">Підсумок кошика POLISOL</div>
-      <div id="polisol-body" style="padding:8px 0 12px;">Кошик порожній для POLISOL.</div>`;
+      <div id="polisol-title" style="padding:12px 16px;font-weight:600;background:#f8f8f8;">Підсумок кошика: кошик порожній</div>
+      <div id="polisol-body" style="padding:8px 0 12px;"></div>`;
             const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
             if (descr && descr.parentNode) descr.parentNode.insertBefore(host, descr);
             else (document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body).insertBefore(host, document.body.firstChild);
             return host;
       }
       function inferCanonFromName(name) { const n = String(name || ''); const m = n.match(/«([^»]+)»/); if (m && m[1]) return removeQuotes(m[1]); return canonContent(n) || ''; }
+
+      // --- Header helper: вычислить лимит
+      function inferLimitFromCart(items) {
+            const fam = (items || []).filter(isPolisolItem);
+            if (!fam.length) return null;
+            const allowed = [15, 30, 45, 60, 75];
+            for (const it of fam) {
+                  const fromName = extractAllowedNumber(itemName(it), allowed);
+                  const fromProd = extractAllowedNumber(it?.product?.name || '', allowed);
+                  if (fromName) return fromName;
+                  if (fromProd) return fromProd;
+            }
+            return null;
+      }
 
       function cartFingerprint(items, lock) {
             const fam = (items || []).filter(isPolisolItem);
@@ -337,17 +311,42 @@
       }
 
       function renderCartSummarySync(cart) {
-            const host = ensureSummaryContainer(); const body = host.querySelector('#polisol-body');
+            const host = ensureSummaryContainer(); const body = host.querySelector('#polisol-body'); const titleEl = host.querySelector('#polisol-title');
             const items = (cart && cart.items) || []; const fam = items.filter(isPolisolItem);
-            const lock = getLock(); const limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
+            const lock = getLock();
 
             const fp = cartFingerprint(items, lock);
             if (__cpc.summaryFP === fp) return;
             __cpc.summaryFP = fp;
 
-            if (!fam.length) { body.textContent = 'Кошик порожній для POLISOL.'; return; }
+            if (!fam.length) {
+                  // пустой POLISOL — только заголовок, тело пустое
+                  if (titleEl) titleEl.textContent = 'Підсумок кошика: кошик порожній';
+                  body.innerHTML = '';
+                  return;
+            }
 
-            // инлайн-стили
+            // вычисляем лимит M
+            let limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
+            if (!limit) {
+                  const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex(uiCount) : null;
+                  if (uiIdx) limit = batchLimitByIndex(uiIdx);
+            }
+            if (!limit) {
+                  const inf = inferLimitFromCart(fam);
+                  if (inf) limit = inf;
+            }
+
+            // заголовок: оставшиеся банки
+            const currentQty = sumFamilyQty(items);
+            if (limit) {
+                  const remaining = Math.max(0, limit - currentQty);
+                  if (titleEl) titleEl.textContent = `Підсумок кошика: Залишилось ${remaining} з ${limit}`;
+            } else {
+                  if (titleEl) titleEl.textContent = 'Підсумок кошика';
+            }
+
+            // таблица
             const tblStyle = 'width:100%;border-collapse:collapse;';
             const thStyle = 'padding:10px 12px;border-top:1px solid #eee;text-align:center;vertical-align:middle;';
             const tdL = 'padding:10px 12px;border-top:1px solid #eee;text-align:left;vertical-align:middle;';
@@ -372,9 +371,7 @@
           <td style="${tdR}">${formatUAH(unit)}</td>
           <td style="${tdR}">${formatUAH(sum)}</td>
         </tr>`;
-                  } catch (ex) {
-                        console.warn('[POLISOL] row render failed:', ex, it);
-                  }
+                  } catch (ex) { console.warn('[POLISOL] row render failed:', ex, it); }
             }
 
             body.innerHTML = `
@@ -427,15 +424,16 @@
             const lock = getLock();
             const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex(uiCount) : null;
 
-            const idx = (lock && lock.batchIndex) ? lock.batchIndex : (uiIdx || null);
-            const limit = idx ? batchLimitByIndex(idx) : null;
+            let idx = (lock && lock.batchIndex) ? lock.batchIndex : (uiIdx || null);
+            let limit = idx ? batchLimitByIndex(idx) : null;
+            if (!limit) { const inf = inferLimitFromCart(items); if (inf) limit = inf; }
+
             const currentQty = sumFamilyQty(items);
             const fp = inlineFingerprint(limit, currentQty);
             if (__cpc.inlineFP === fp) return;
             __cpc.inlineFP = fp;
 
             if (!limit) { if (rowCh) rowCh.style.display = 'none'; return; }
-
             const percent = Math.max(0, Math.min(100, Math.round((currentQty / limit) * 100)));
             if (rowCh) { rowCh.style.display = (percent >= 100) ? '' : 'none'; }
       }
@@ -541,7 +539,6 @@
       }
 
       waitEcwid(() => {
-            Ecwid.OnAPILoadED?.add?.(() => { }) // guard if casing differs
             Ecwid.OnAPILoaded.add(async () => {
                   Ecwid.OnPageLoaded.add(async (page) => {
                         // определить карточку POLISOL и применить/снять заголовок описания
