@@ -1,10 +1,15 @@
-/* POLISOL widget v2025-09-06-26  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-26)
-   - Таблица оформлена ИНЛАЙН-стилями: заголовки по центру, фин.значения справа, «Сума разом» с colspan=4.
-   - Остальной функционал: прогресс-бар в шапке модуля, фиксация партії, запрет смешивания партій, сводка корзины.
+/* POLISOL widget v2025-09-06-27  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-27)
+   Новое:
+   - Динамический override ecwidMessages['ProductDetails.description_title'] = 'Виберіть партію, вміст та кількість для додавання в кошик'
+     только на карточке POLISOL; на других страницах — возврат дефолта (delete).
+   Наследовано из v26:
+   - Таблица «Підсумок кошика POLISOL» с ИНЛАЙН-стилями, суммы справа, «Сума разом» на всю ширину.
+   - Прогресс-бар вместо .product-details-module__title.ec-header-h6; «Оформити замовлення» только при 100%.
+   - Блокировка смешивания партій; можно смешивать «Вміст» в рамках одной партії до лимита.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-26 ready');
+      console.info('POLISOL widget v2025-09-06-27 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -19,6 +24,19 @@
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
             cssInjected: false, summaryFP: null, inlineFP: null, headerFP: null
       });
+
+      // --- Dynamic Ecwid message override (description title)
+      const ECWID_MSG_KEY = 'ProductDetails.description_title';
+      const ECWID_DESC_TITLE = 'Виберіть партію, вміст та кількість для додавання в кошик';
+      function applyDescriptionTitleOverride(enabled) {
+            window.ecwidMessages = window.ecwidMessages || {};
+            if (enabled) {
+                  window.ecwidMessages[ECWID_MSG_KEY] = ECWID_DESC_TITLE;
+            } else {
+                  try { delete window.ecwidMessages[ECWID_MSG_KEY]; } catch (_) { }
+            }
+            try { Ecwid.refreshConfig && Ecwid.refreshConfig(); } catch (_) { }
+      }
 
       // --- Lock (фиксируем ТОЛЬКО размер партії)
       const LOCK_KEY = 'POLISOL_LOCK';
@@ -240,8 +258,8 @@
             host = document.createElement('div'); host.id = 'polisol-cart-summary';
             host.setAttribute('style', 'margin:16px 0 8px;border:1px solid #e7e7e7;border-radius:12px;overflow:hidden;background:#fff;');
             host.innerHTML = `
-      <div style="padding:12px 16px;font-weight:600;background:#f8f8f8;">Підсумок кошика</div>
-      <div id="polisol-body" style="padding:8px 0 12px;">Кошик порожній</div>`;
+      <div style="padding:12px 16px;font-weight:600;background:#f8f8f8;">Підсумок кошика POLISOL</div>
+      <div id="polisol-body" style="padding:8px 0 12px;">Кошик порожній для POLISOL.</div>`;
             const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
             if (descr && descr.parentNode) descr.parentNode.insertBefore(host, descr);
             else (document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body).insertBefore(host, document.body.firstChild);
@@ -272,7 +290,6 @@
             const tblStyle = 'width:100%;border-collapse:collapse;';
             const thStyle = 'padding:10px 12px;border-top:1px solid #eee;text-align:center;vertical-align:middle;';
             const tdL = 'padding:10px 12px;border-top:1px solid #eee;text-align:left;vertical-align:middle;';
-            const tdC = 'padding:10px 12px;border-top:1px solid #eee;text-align:center;vertical-align:middle;';
             const tdR = 'padding:10px 12px;border-top:1px solid #eee;text-align:right;white-space:nowrap;vertical-align:middle;';
             const totalL = 'padding:12px 12px;border-top:2px solid #ddd;font-weight:700;text-align:right;';
             const totalR = 'padding:12px 12px;border-top:2px solid #ddd;font-weight:700;text-align:right;white-space:nowrap;';
@@ -288,7 +305,7 @@
                         const unit = getUnitPrice(it, lock);
                         const sum = unit * qty; total += sum;
                         rows += `<tr>
-          <td style="${tdC}">${idx}</td>
+          <td style="${thStyle}">${idx}</td>
           <td style="${tdL}">${label}</td>
           <td style="${tdR}">${qty} банок</td>
           <td style="${tdR}">${formatUAH(unit)}</td>
@@ -496,8 +513,17 @@
       waitEcwid(() => {
             Ecwid.OnAPILoaded.add(async () => {
                   Ecwid.OnPageLoaded.add(async (page) => {
-                        if (page && page.type === 'PRODUCT') { const sku = getSku(); if (sku) __cpc.currentSku = sku; __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0; }
-                        else { __cpc.currentSku = null; __cpc.isTargetMemo = null; }
+                        // определяем, наша ли карточка (POLISOL), и сразу переключаем/возвращаем заголовок описания
+                        let isPolisol = false;
+                        if (page && page.type === 'PRODUCT') {
+                              const sku = getSku(); if (sku) __cpc.currentSku = sku;
+                              __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0;
+                              isPolisol = !!__cpc.isTargetMemo;
+                        } else {
+                              __cpc.currentSku = null; __cpc.isTargetMemo = null;
+                              isPolisol = false;
+                        }
+                        applyDescriptionTitleOverride(isPolisol);
 
                         if (page?.type !== 'PRODUCT' || !isTargetProduct()) return;
 
