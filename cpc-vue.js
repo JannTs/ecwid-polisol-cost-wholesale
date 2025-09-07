@@ -1,14 +1,14 @@
-/* POLISOL widget v2025-09-06-28  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-28)
-   Изменения:
-   - Убран прогресс-бар и подсказка «Залишилось…».
-   - Кнопка «Оформити замовлення» показывается ТОЛЬКО когда набрана вся партія.
-   - Динамический override ecwidMessages['ProductDetails.description_title']
-     + DOM-форсаж заголовка описания (возврат дефолта на других страницах).
+/* POLISOL widget v2025-09-06-29  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-29)
+   - Прогресс-бар и «Залишилось…» удалены.
+   - «Оформити замовлення» показываем только при 100% набора партії.
+   - Подмена ProductDetails.description_title через ecwidMessages + улучшенный DOM-форсаж:
+     ищем заголовок описания «по близости» к #productDescription или по тексту ('Деталі', 'Details', 'Опис', 'Описание').
+   - Логи приглушены: не спамим "not found" на каждом мутационном тике.
    - Таблица «Підсумок кошика POLISOL» — инлайн-стили.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-28 ready');
+      console.info('POLISOL widget v2025-09-06-29 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -21,44 +21,86 @@
       const __cpc = (window.__cpc = window.__cpc || {
             optsBound: false, mo: null, moScheduled: false, warned: new Set(),
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
-            cssInjected: false, summaryFP: null, inlineFP: null
+            cssInjected: false, summaryFP: null, inlineFP: null,
+            descLogState: null
       });
 
       // --- Dynamic Ecwid message override (description title)
       const ECWID_MSG_KEY = 'ProductDetails.description_title';
       const ECWID_DESC_TITLE = 'Виберіть партію, вміст та кількість для додавання в кошик';
+
       function applyDescriptionTitleOverride(enabled) {
             window.ecwidMessages = window.ecwidMessages || {};
             if (enabled) window.ecwidMessages[ECWID_MSG_KEY] = ECWID_DESC_TITLE;
             else { try { delete window.ecwidMessages[ECWID_MSG_KEY]; } catch (_) { } }
             try { Ecwid.refreshConfig && Ecwid.refreshConfig(); } catch (_) { }
       }
-      // DOM fallback: найти заголовок рядом с описанием и заменить
+
+      // --- Description title (DOM fallback — умный поиск)
+      const TITLE_SEL = '.product-details-module__title, .product-details-module__title.ec-header-h6';
+      const TITLE_TEXT_CANDIDATES = ['Деталі', 'Details', 'Опис', 'Описание', 'Description'];
+
+      function containsDesc(node) {
+            if (!node) return false;
+            if (node.id === 'productDescription') return true;
+            try { return !!node.querySelector?.('#productDescription'); } catch (_) { return false; }
+      }
+
+      function findHeadersByProximity() {
+            const headers = Array.from(document.querySelectorAll(TITLE_SEL));
+            const desc = document.getElementById('productDescription');
+            if (!desc || !headers.length) return [];
+            const out = [];
+            for (const h of headers) {
+                  let el = h.nextElementSibling;
+                  while (el) {
+                        if (el.matches?.(TITLE_SEL)) break; // следующий модуль — значит не наш
+                        if (el === desc || containsDesc(el)) { out.push(h); break; }
+                        el = el.nextElementSibling;
+                  }
+            }
+            return out;
+      }
+
+      function findHeadersByText() {
+            const headers = Array.from(document.querySelectorAll(TITLE_SEL));
+            const out = headers.filter(h => {
+                  const t = (h.textContent || '').trim();
+                  return TITLE_TEXT_CANDIDATES.some(x => t.toLowerCase() === x.toLowerCase());
+            });
+            return out;
+      }
+
       function findDescriptionTitleNodes() {
-            const nodes = [];
-            const desc = document.querySelector('#productDescription');
+            const set = new Set();
+            // 1) предыдущий брат от #productDescription
+            const desc = document.getElementById('productDescription');
             if (desc) {
                   const prev = desc.previousElementSibling;
-                  if (prev && prev.classList && prev.classList.contains('product-details-module__title')) {
-                        nodes.push(prev);
-                  }
+                  if (prev?.matches?.(TITLE_SEL)) set.add(prev);
+                  // 2) поиск в предках
                   const scope = desc.closest('.product-details, .product-details__description, .product-details__product-description, .product-details__product') || desc.parentElement;
-                  if (scope) scope.querySelectorAll('.product-details-module__title').forEach(n => nodes.push(n));
+                  if (scope) scope.querySelectorAll(TITLE_SEL).forEach(n => set.add(n));
             }
-            return Array.from(new Set(nodes));
+            // 3) «по близости» (пока не встретим следующий модуль)
+            findHeadersByProximity().forEach(n => set.add(n));
+            // 4) по тексту (Деталі/Details/…)
+            findHeadersByText().forEach(n => set.add(n));
+            return Array.from(set);
       }
+
+      function logDescState(state) {
+            if (__cpc.descLogState === state) return;
+            __cpc.descLogState = state;
+            console.info('[POLISOL] desc-title:', state);
+      }
+
       function applyDescriptionTitleDom(enabled, text) {
+            if (!enabled) { logDescState('skipped (disabled)'); return; }
             const nodes = findDescriptionTitleNodes();
-            if (!nodes.length) {
-                  console.info('[POLISOL] desc-title: not found');
-                  return;
-            }
-            if (enabled) {
-                  nodes.forEach(n => { n.textContent = text; n.style.display = ''; });
-                  console.info('[POLISOL] desc-title: applied to', nodes.length, 'node(s)');
-            } else {
-                  console.info('[POLISOL] desc-title: skipped (disabled)');
-            }
+            if (!nodes.length) { logDescState('not found'); return; }
+            nodes.forEach(n => { n.textContent = text; n.style.display = ''; });
+            logDescState('applied to ' + nodes.length + ' node(s)');
       }
 
       // --- Lock (фиксируем ТОЛЬКО размер партії)
@@ -253,7 +295,7 @@
             return { ok: false, error: lastErr };
       }
 
-      // --- Styles (без прогресса/хинта)
+      // --- Styles (минимум, без прогресса/хинта)
       function ensureStyles() {
             if (__cpc.cssInjected) return;
             const css = `
@@ -467,10 +509,7 @@
       function observeDom() {
             const root = document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.querySelector('.ec-store, .ecwid-productBrowser') || document.body;
             if (__cpc.mo) { try { __cpc.mo.disconnect(); } catch (_) { } }
-            const mo = new MutationObserver((muts) => {
-                  const pol = document.getElementById('polisol-cart-summary'); let onlyInside = true;
-                  for (const m of muts) { const t = m.target; if (!pol || !pol.contains(t)) { onlyInside = false; break; } }
-                  if (onlyInside) return;
+            const mo = new MutationObserver(() => {
                   if (__cpc.moScheduled) return; __cpc.moScheduled = true;
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
@@ -502,9 +541,10 @@
       }
 
       waitEcwid(() => {
+            Ecwid.OnAPILoadED?.add?.(() => { }) // guard if casing differs
             Ecwid.OnAPILoaded.add(async () => {
                   Ecwid.OnPageLoaded.add(async (page) => {
-                        // определить карточку POLISOL, применить/снять заголовок описания
+                        // определить карточку POLISOL и применить/снять заголовок описания
                         let isPolisol = false;
                         if (page && page.type === 'PRODUCT') {
                               const sku = getSku(); if (sku) __cpc.currentSku = sku;
