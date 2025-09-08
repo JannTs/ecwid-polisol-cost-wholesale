@@ -1,15 +1,17 @@
-/* POLISOL widget v2025-09-06-33  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-33)
+/* POLISOL widget v2025-09-06-34  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-34)
+   - FIX: «Оформити замовлення» ведёт в кошик (#!/cart), а не на checkout.
+   - Добавлен перехват клика по ссылке (Ecwid.openPage('cart')), чтобы гарантировать переход.
    - Заголовок описания по «официалке» Ecwid: OnPageLoaded / OnPageSwitch + мягкая DOM-подстраховка (без мерцания).
-   - Сводка корзины:
+   - Сводка кошика:
        * пусто → «Підсумок кошика: кошик порожній» (таблица скрыта)
        * частично → «Підсумок кошика: Залишилось N із M»
-       * полно → «Партія M сформована.» + ссылка «Оформить замовлення»
+       * полно → «Партія M сформована.» + ссылка «Оформити замовлення»
    - Таблица: «К-сть», в колонке — только цифры; для «Квас…» не добавляем префикс «ПОЛІСОЛ™».
    - Блокировка смешивания партий; цены подтягиваются по партии.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-33 ready');
+      console.info('POLISOL widget v2025-09-06-34 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -27,7 +29,7 @@
       const __cpc = (window.__cpc = window.__cpc || {
             optsBound: false, mo: null, moScheduled: false, warned: new Set(),
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
-            cssInjected: false, summaryFP: null
+            cssInjected: false, summaryFP: null, cartLinkBound: false
       });
 
       // --- Ecwid helpers
@@ -269,6 +271,23 @@
             return parts.join('|');
       }
 
+      // --- Перехват клика по ссылке «Оформити замовлення» (в шапке сводки)
+      function bindCartLinkHandler() {
+            if (__cpc.cartLinkBound) return;
+            document.addEventListener('click', (e) => {
+                  const a = e.target instanceof Element ? e.target.closest('a.polisol-go-cart') : null;
+                  if (!a) return;
+                  e.preventDefault();
+                  try {
+                        if (typeof Ecwid !== 'undefined' && Ecwid.openPage) Ecwid.openPage('cart');
+                        else location.hash = '!/cart';
+                  } catch (_) {
+                        location.hash = '!/cart';
+                  }
+            }, true);
+            __cpc.cartLinkBound = true;
+      }
+
       // --- Рендер сводки
       function renderCartSummarySync(cart) {
             const host = ensureSummaryContainer(); const body = host.querySelector('#polisol-body'); const titleEl = host.querySelector('#polisol-title');
@@ -303,7 +322,8 @@
                   const remaining = Math.max(0, limit - currentQty);
                   if (remaining <= 0) {
                         if (titleEl) {
-                              titleEl.innerHTML = `Партія ${limit} сформована. <a href="#!/checkout" style="margin-left:10px; text-decoration:underline;">Оформить замовлення</a>`;
+                              // FIX: ссылка на кошик + корректный текст
+                              titleEl.innerHTML = `Партія ${limit} сформована. <a href="#!/cart" class="polisol-go-cart" style="margin-left:10px; text-decoration:underline;">Оформити замовлення</a>`;
                         }
                   } else {
                         if (titleEl) titleEl.textContent = `Підсумок кошика: Залишилось ${remaining} із ${limit}`;
@@ -391,7 +411,7 @@
                   const hasFam = cartHasFamily(beforeCart.items);
                   let lock = getLock();
 
-                  if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
+                  if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
                   if (lock) {
                         if (String(lock.batchIndex) !== String(idx)) { const lim = batchLimitByIndex(lock.batchIndex); alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.'); return; }
                   } else { setLock({ batchIndex: idx }); lockSetThisClick = true; lock = getLock(); }
@@ -512,6 +532,7 @@
 
                         ensureStyles();
                         ensureSummaryContainer();
+                        bindCartLinkHandler(); // ← перехват клика по «Оформити замовлення»
 
                         try {
                               const res = await fetch(PRICING_ENDPOINT); const pr = await res.json();
