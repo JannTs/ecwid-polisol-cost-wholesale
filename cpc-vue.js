@@ -1,17 +1,11 @@
-/* POLISOL widget v2025-09-06-34  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-34)
-   - FIX: «Оформити замовлення» ведёт в кошик (#!/cart), а не на checkout.
-   - Добавлен перехват клика по ссылке (Ecwid.openPage('cart')), чтобы гарантировать переход.
-   - Заголовок описания по «официалке» Ecwid: OnPageLoaded / OnPageSwitch + мягкая DOM-подстраховка (без мерцания).
-   - Сводка кошика:
-       * пусто → «Підсумок кошика: кошик порожній» (таблица скрыта)
-       * частично → «Підсумок кошика: Залишилось N із M»
-       * полно → «Партія M сформована.» + ссылка «Оформити замовлення»
-   - Таблица: «К-сть», в колонке — только цифры; для «Квас…» не добавляем префикс «ПОЛІСОЛ™».
-   - Блокировка смешивания партий; цены подтягиваются по партии.
+/* POLISOL widget v2025-09-06-35  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-35)
+   - Сводка (#polisol-cart-summary) показывается ТОЛЬКО на карточке POLISOL (SKU начинается с "ПОЛІСОЛ-").
+   - На любых других страницах (включая Cart) — контейнер удаляется и не создаётся.
+   - Остальное: мини-патч Ecwid заголовка, блокировка смешивания, таблица, цены.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-34 ready');
+      console.info('POLISOL widget v2025-09-06-35 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -29,7 +23,7 @@
       const __cpc = (window.__cpc = window.__cpc || {
             optsBound: false, mo: null, moScheduled: false, warned: new Set(),
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
-            cssInjected: false, summaryFP: null, cartLinkBound: false
+            cssInjected: false, summaryFP: null, cartLinkBound: false, pageType: null
       });
 
       // --- Ecwid helpers
@@ -42,7 +36,7 @@
       const setLock = (o) => { try { sessionStorage.setItem(LOCK_KEY, JSON.stringify(o)); } catch (_) { } };
       const clearLock = () => { try { sessionStorage.removeItem(LOCK_KEY); } catch (_) { } };
 
-      // --- Fingerprint ожидание изменений корзины
+      // --- FP ожидание
       async function waitForCartChange(prevFP, tries = 10, delay = 300) {
             for (let i = 0; i < tries; i++) {
                   const cart = await fetchCart();
@@ -87,6 +81,9 @@
             const memo = __cpc.currentSku; if (memo) { __cpc.isTargetMemo = memo.indexOf(FAMILY_PREFIX) === 0; return __cpc.isTargetMemo; }
             const sku = getSku() || ''; if (sku) __cpc.currentSku = sku;
             __cpc.isTargetMemo = sku.indexOf(FAMILY_PREFIX) === 0; return __cpc.isTargetMemo;
+      }
+      function isPolisolProductPage() {
+            return __cpc.pageType === 'PRODUCT' && isTargetProduct();
       }
 
       // --- Партия (batch) helpers
@@ -160,7 +157,7 @@
             return canonContent(name) || '';
       }
 
-      // --- Цены (из cache или из товара)
+      // --- Цены
       function getUnitPriceFromCache(it, lock) {
             try {
                   if (!pricingCache?.__index || !lock?.batchIndex) return 0;
@@ -201,7 +198,7 @@
             } else { setPriceUI(null); return { idx: idx || null, canon: canon || null, price: null }; }
       }
 
-      // --- Quote API с мульти-попыткой
+      // --- Quote API
       async function requestQuote({ canon, contentKey, idx }) {
             const attempts = [
                   { payload: { contentLabel: canon, batchIndex: idx }, tag: 'contentLabel' },
@@ -224,16 +221,22 @@
             return { ok: false, error: lastErr };
       }
 
-      // --- Стили (контейнер/таблица — инлайн, здесь пусто)
+      // --- Стили (инлайн в разметке таблицы); флаг для единообразия
       function ensureStyles() {
             if (__cpc.cssInjected) return;
-            const css = ``.trim();
-            const style = document.createElement('style'); style.id = 'polisol-style'; style.textContent = css; document.head.appendChild(style);
+            const style = document.createElement('style'); style.id = 'polisol-style'; style.textContent = ''; document.head.appendChild(style);
             __cpc.cssInjected = true;
       }
 
-      // --- Контейнер сводки
+      // --- Контейнер сводки (guards + remove)
+      function removeSummaryContainer() {
+            const host = document.getElementById('polisol-cart-summary');
+            if (host && host.parentNode) host.parentNode.removeChild(host);
+            __cpc.summaryFP = null;
+      }
       function ensureSummaryContainer() {
+            // Создаём ТОЛЬКО на карточке POLISOL
+            if (!isPolisolProductPage()) { removeSummaryContainer(); return null; }
             let host = document.getElementById('polisol-cart-summary'); if (host) return host;
             ensureStyles();
             host = document.createElement('div'); host.id = 'polisol-cart-summary';
@@ -242,8 +245,13 @@
       <div id="polisol-title" style="padding:12px 16px;font-weight:600;background:#f8f8f8;">Підсумок кошика: кошик порожній</div>
       <div id="polisol-body" style="padding:8px 0 12px;"></div>`;
             const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
-            if (descr && descr.parentNode) descr.parentNode.insertBefore(host, descr);
-            else (document.querySelector('.ec-product-details, .ecwid-productBrowser-details, .product-details') || document.body).insertBefore(host, document.body.firstChild);
+            if (descr && descr.parentNode) {
+                  descr.parentNode.insertBefore(host, descr);
+            } else {
+                  // если по какой-то причине нет описания, не вставляем вообще
+                  console.debug('[POLISOL] skip summary mount: no productDescription');
+                  return null;
+            }
             return host;
       }
       function inferCanonFromName(name) { const n = String(name || ''); const m = n.match(/«([^»]+)»/); if (m && m[1]) return removeQuotes(m[1]); return canonContent(n) || ''; }
@@ -271,7 +279,7 @@
             return parts.join('|');
       }
 
-      // --- Перехват клика по ссылке «Оформити замовлення» (в шапке сводки)
+      // --- Перехват клика по ссылке «Оформити замовлення»
       function bindCartLinkHandler() {
             if (__cpc.cartLinkBound) return;
             document.addEventListener('click', (e) => {
@@ -290,7 +298,11 @@
 
       // --- Рендер сводки
       function renderCartSummarySync(cart) {
-            const host = ensureSummaryContainer(); const body = host.querySelector('#polisol-body'); const titleEl = host.querySelector('#polisol-title');
+            // Жёсткий guard: если не карточка POLISOL — удаляем и выходим
+            if (!isPolisolProductPage()) { removeSummaryContainer(); return; }
+
+            const host = ensureSummaryContainer(); if (!host) return;
+            const body = host.querySelector('#polisol-body'); const titleEl = host.querySelector('#polisol-title');
             const items = (cart && cart.items) || []; const fam = items.filter(isPolisolItem);
             const lock = getLock();
 
@@ -322,7 +334,6 @@
                   const remaining = Math.max(0, limit - currentQty);
                   if (remaining <= 0) {
                         if (titleEl) {
-                              // FIX: ссылка на кошик + корректный текст
                               titleEl.innerHTML = `Партія ${limit} сформована. <a href="#!/cart" class="polisol-go-cart" style="margin-left:10px; text-decoration:underline;">Оформити замовлення</a>`;
                         }
                   } else {
@@ -346,7 +357,6 @@
                   try {
                         const idx = i + 1;
                         const canon = getItemContentLabel(it) || inferCanonFromName(itemName(it)) || '—';
-                        // Без префикса для любых «Квас…»
                         const needPrefix = !/^Квас/i.test(canon);
                         const label = `${needPrefix ? 'ПОЛІСОЛ™' : ''}«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
                         const qty = Number(it.quantity || 0);
@@ -384,14 +394,14 @@
       }
       async function renderCartSummary() { try { const cart = await fetchCart(); renderCartSummarySync(cart); } catch (_) { } }
 
-      // --- Add to Bag перехват (с проверками партии/лимита)
+      // --- Add to Bag перехват
       function findQtyInput() {
             return document.querySelector('.details-product-purchase__qty input[type="number"]') || document.querySelector('input[type="number"][name="quantity"]');
       }
       async function handleAddToBagClick(e) {
             const tgt = e.target; if (!(tgt instanceof Element)) return;
             const btn = tgt.closest('.details-product-purchase__add-to-bag button.form-control__button'); if (!btn) return;
-            if (!isTargetProduct()) return;
+            if (!isPolisolProductPage()) return;
 
             e.preventDefault(); e.stopPropagation();
             if (__cpc.adding) return; __cpc.adding = true;
@@ -442,7 +452,7 @@
       }
       function attachAddToCart() { if (window.__cpc_add_bound) return; document.addEventListener('click', handleAddToBagClick, true); window.__cpc_add_bound = true; }
 
-      // --- Реактивность (без вмешательства в заголовок описания)
+      // --- Реактивность
       function bindOptionChange() {
             if (__cpc.optsBound) return;
             document.addEventListener('change', (e) => { if (e.target && e.target.matches && e.target.matches('.form-control__select')) refreshUnitPrice(); }, true);
@@ -456,7 +466,7 @@
                   if (__cpc.moScheduled) return; __cpc.moScheduled = true;
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
-                        refreshUnitPrice();
+                        if (isPolisolProductPage()) refreshUnitPrice();
                   });
             });
             mo.observe(root, { childList: true, subtree: true }); __cpc.mo = mo;
@@ -465,7 +475,7 @@
             if (__cpc.cartBound) return;
             Ecwid.OnCartChanged.add(async (_cart) => {
                   try {
-                        await renderCartSummary();
+                        if (isPolisolProductPage()) await renderCartSummary();
                         const items = _cart?.items || [];
                         if (!cartHasFamily(items)) clearLock();
                   } catch (_) { }
@@ -480,7 +490,7 @@
             return idxMap;
       }
 
-      // --- Официальный setDescTitle + мягкая DOM-подстраховка (двойной «nudging»)
+      // --- Официальный setDescTitle + мягкая DOM-подстраховка
       function setDescTitleSmart(text) {
             window.ecwidMessages = window.ecwidMessages || {};
             window.ecwidMessages[DESC_KEY] = text;
@@ -510,29 +520,35 @@
             Ecwid.OnAPILoaded.add(async () => {
                   // Ecwid: смена страниц внутри виджета
                   Ecwid.OnPageSwitch.add(function (page) {
-                        if (page.type !== 'PRODUCT') setDescTitleSmart(DESC_DEFAULT);
+                        __cpc.pageType = page?.type || null;
+                        if (page.type !== 'PRODUCT') {
+                              setDescTitleSmart(DESC_DEFAULT);
+                              removeSummaryContainer(); // ← убрать сводку на всех не-product страницах
+                        }
                   });
 
                   Ecwid.OnPageLoaded.add(async (page) => {
+                        __cpc.pageType = page?.type || null;
+
                         // Определить карточку / SKU
                         if (page && page.type === 'PRODUCT') {
                               const sku = getSku(); if (sku) __cpc.currentSku = sku;
                               __cpc.isTargetMemo = (sku || '').indexOf(FAMILY_PREFIX) === 0;
                         } else { __cpc.currentSku = null; __cpc.isTargetMemo = null; }
 
-                        // Применить заголовок по «официалке»
+                        // Заголовок описания
                         if (page.type === 'PRODUCT') {
                               setDescTitleSmart(isTargetProduct() ? DESC_POLISOL : DESC_DEFAULT);
                         } else {
                               setDescTitleSmart(DESC_DEFAULT);
                         }
 
-                        // Остальная логика только на карточке POLISOL
-                        if (page?.type !== 'PRODUCT' || !isTargetProduct()) return;
+                        // Только на карточке POLISOL — всё остальное:
+                        if (!isPolisolProductPage()) { removeSummaryContainer(); return; }
 
                         ensureStyles();
                         ensureSummaryContainer();
-                        bindCartLinkHandler(); // ← перехват клика по «Оформити замовлення»
+                        bindCartLinkHandler();
 
                         try {
                               const res = await fetch(PRICING_ENDPOINT); const pr = await res.json();
