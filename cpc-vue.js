@@ -342,10 +342,18 @@
       }
 
       // ----- PV-guard (блокировка панели покупки на «технических» товарах категории NUXT_PV_CATEGORY_ID)
-      function skuLooksLikeTech(sku) {
+      /* function skuLooksLikeTech(sku) {
             // Пример: "ПОЛІСОЛ-К-1", "ПОЛІСОЛ-Ж-15" и т.п. — т.е. есть суффикс "-NN" (число)
             return /^ПОЛІСОЛ-.+?-\d+$/i.test(String(sku || '').trim());
+      } */
+
+      // Разрешаем только: ПОЛІСОЛ-X-N и ПОЛІСОЛ-XX-N
+      // где X — 1–2 кириллические буквы (включая укр. ІЇЄҐ), N — одна цифра 1..5
+      function skuLooksLikeTech(sku) {
+            const re = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-[1-5]$/i;
+            return re.test(String(sku || '').trim());
       }
+
       function parseCategoryFromHash() {
             const h = location.hash || '';
             const m = h.match(/[?&]category=(\d+)/);
