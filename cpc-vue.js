@@ -1,14 +1,15 @@
-/* POLISOL widget v2025-09-06-38  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-38)
+/* POLISOL widget v2025-09-06-39  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-39)
    - Жёсткий таргетинг: работает ТОЛЬКО на мастер-карточке POLISOL:
        * SKU начинается с "ПОЛІСОЛ-"
-       * И page.productId === window.POLISOL_MASTER_PRODUCT_ID (777... задан извне)
-   - Без автодетекта/learning и без localStorage.
-   - Остальное: заголовок описания по «официалке», сводка корзины, ссылка «Оформити замовлення» → #!/cart,
-     предохранитель на странице CART.
+       * И page.productId === window.POLISOL_MASTER_PRODUCT_ID (задаётся извне)
+   - Без автодетекта и без localStorage.
+   - Анти-мерцание цены: дебаунс обновления и запись в DOM только при реальном изменении.
+   - «Оформити замовлення» → #!/cart (+ перехват Ecwid.openPage('cart')).
+   - Сводка корзины на карточке POLISOL и «предохранитель» на странице CART.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-38 ready');
+      console.info('POLISOL widget v2025-09-06-39 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -28,10 +29,13 @@
             cartBound: false, adding: false, currentSku: null, isTargetMemo: null,
             cssInjected: false, summaryFP: null, cartLinkBound: false, pageType: null,
             cartSafetyBound: false, cartGuardTimer: null, cartGuardState: null,
-            currentProductId: null
+            currentProductId: null,
+            // anti-flicker
+            priceShown: null,
+            ruiTimer: null
       });
 
-      // ----- MASTER ID (жёстко из window, без fallback)
+      // ----- MASTER ID (жёстко из window)
       function getMasterId() {
             const id = Number(window.POLISOL_MASTER_PRODUCT_ID || 0);
             return (isFinite(id) && id > 0) ? id : null;
@@ -122,9 +126,9 @@
                   const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]); return v != null ? v : null;
             }
             const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
-            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? vv : null;
+            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? v : null;
       }
-      const batchCountToIndex = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (н === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null)))));
+      const batchCountToIndex = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null)))));
       const batchLimitByIndex = (idx) => (idx === 1 ? 15 : (idx === 2 ? 30 : (idx === 3 ? 45 : (idx === 4 ? 60 : (idx === 5 ? 75 : null)))));
 
       // ----- "Вміст"
@@ -183,7 +187,7 @@
             return getUnitPriceFromCache(it, lock);
       }
 
-      // ----- Price UI
+      // ----- Price UI (anti-flicker)
       function priceEls() {
             const span = document.querySelector('.details-product-price__value.ec-price-item');
             const box = document.querySelector('.product-details__product-price.ec-price-item[itemprop="price"]') || document.querySelector('.product-details__product-price.ec-price-item');
@@ -191,9 +195,28 @@
       }
       function setPriceUI(numOrNull) {
             const { span, box } = priceEls(); if (!span) return;
+
             if (initialPriceText == null) initialPriceText = span.textContent;
-            if (typeof numOrNull === 'number' && isFinite(numOrNull) && numOrNull > 0) { span.textContent = formatUAH(numOrNull); if (box) box.setAttribute('content', String(numOrNull)); }
-            else { span.textContent = initialPriceText || '€0'; if (box) box.setAttribute('content', '0'); }
+
+            let nextText, nextNum;
+            if (typeof numOrNull === 'number' && isFinite(numOrNull) && numOrNull > 0) {
+                  nextText = formatUAH(numOrNull);
+                  nextNum = numOrNull;
+            } else {
+                  nextText = initialPriceText || '€0';
+                  nextNum = 0;
+            }
+
+            // Записываем в DOM только при реальном изменении
+            if (__cpc.priceShown === nextText) return;
+
+            span.textContent = nextText;
+            if (box) {
+                  const prevAttr = box.getAttribute('content') || '';
+                  const nextAttr = String(nextNum);
+                  if (prevAttr !== nextAttr) box.setAttribute('content', nextAttr);
+            }
+            __cpc.priceShown = nextText;
       }
       function refreshUnitPrice() {
             if (!pricingCache?.ok) { setPriceUI(null); return { idx: null, canon: null, price: null }; }
@@ -206,6 +229,13 @@
                   if (!row) { if (!__cpc.warned.has(key)) { console.warn('[POLISOL] price row not found for', canon, 'key=', key); __cpc.warned.add(key); } setPriceUI(null); return { idx, canon, price: null }; }
                   const price = row[(idx - 1) | 0] || 0; setPriceUI(price); return { idx, canon, price };
             } else { setPriceUI(null); return { idx: idx || null, canon: canon || null, price: null }; }
+      }
+      function refreshUnitPriceDebounced() {
+            if (__cpc.ruiTimer) return;
+            __cpc.ruiTimer = setTimeout(() => {
+                  __cpc.ruiTimer = null;
+                  refreshUnitPrice();
+            }, 80);
       }
 
       // ----- Quote API
@@ -417,6 +447,7 @@
 
             let lockSetThisClick = false; let added = false;
             try {
+                  // тут нужен мгновенный актуальный контекст — без дебаунса
                   const { idx, canon } = refreshUnitPrice();
                   if (!idx) { alert('Оберіть розмір партії.'); return; }
                   if (!canon) { alert('Оберіть «Вміст».'); return; }
@@ -464,8 +495,14 @@
       // ----- Реактивность
       function bindOptionChange() {
             if (__cpc.optsBound) return;
-            document.addEventListener('change', (e) => { if (e.target && e.target.matches && e.target.matches('.form-control__select')) refreshUnitPrice(); }, true);
-            document.addEventListener('change', (e) => { if (e.target && e.target.matches && e.target.matches('input.form-control__radio')) refreshUnitPrice(); }, true);
+            document.addEventListener('change', (e) => {
+                  if (e.target && e.target.matches && e.target.matches('.form-control__select'))
+                        refreshUnitPriceDebounced();
+            }, true);
+            document.addEventListener('change', (e) => {
+                  if (e.target && e.target.matches && e.target.matches('input.form-control__radio'))
+                        refreshUnitPriceDebounced();
+            }, true);
             __cpc.optsBound = true;
       }
       function observeDom() {
@@ -475,7 +512,7 @@
                   if (__cpc.moScheduled) return; __cpc.moScheduled = true;
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
-                        if (isMasterPolisolPage()) refreshUnitPrice();
+                        if (isMasterPolisolPage()) refreshUnitPriceDebounced();
                   });
             });
             mo.observe(root, { childList: true, subtree: true }); __cpc.mo = mo;
@@ -680,7 +717,8 @@
                         attachAddToCart();
 
                         await renderCartSummary();
-                        refreshUnitPrice();
+                        // одноразовое мягкое обновление цены после загрузки
+                        refreshUnitPriceDebounced();
                   });
             });
       });
