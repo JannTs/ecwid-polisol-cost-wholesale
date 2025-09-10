@@ -1,16 +1,16 @@
-/* POLISOL widget v2025-09-06-41  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-41)
+/* POLISOL widget v2025-09-06-42  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-42)
    - Жёсткий таргетинг мастер-карточки: работает ТОЛЬКО при page.productId === POLISOL_MASTER_PRODUCT_ID и SKU с префиксом "ПОЛІСОЛ-"
    - Анти-мерцание цены: дебаунс + запись в DOM только при реальном изменении
    - Сводка корзины на мастер-странице POLISOL
    - Предохранитель на CART
-   - PV-guard: на PRODUCT со SKU вида "ПОЛІСОЛ-X-N" или "ПОЛІСОЛ-XX-N" (X кириллица 1–2, N ∈ {1..5})
-     скрываем панель покупки и показываем ссылку «Перейти до кошика».
-     Категория NUXT_PV_CATEGORY_ID используется как доп. сигнал (не обязательна).
-     Оверрайды: window.PV_FORCE_ON=true, window.PV_PRODUCT_IDS=[...]
+   - PV-guard (упрощённый и «точный»):
+       * активируется на PRODUCT со SKU вида "ПОЛІСОЛ-X-N" или "ПОЛІСОЛ-XX-N" (X — 1–2 кириллические буквы incl. ІЇЄҐ; N ∈ {1..5})
+       * и только если это НЕ мастер-карточка
+       * скрывает панель покупки и показывает ссылку «Перейти до кошика»
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-41 ready');
+      console.info('POLISOL widget v2025-09-06-42 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -38,13 +38,9 @@
             pvMounted: false, pvHidden: false
       });
 
-      // ----- MASTER / PV IDs (из window)
+      // ----- MASTER ID (из window)
       function getMasterId() {
             const id = Number(window.POLISOL_MASTER_PRODUCT_ID || 0);
-            return (isFinite(id) && id > 0) ? id : null;
-      }
-      function getPvCategoryId() {
-            const id = Number(window.NUXT_PV_CATEGORY_ID || 0);
             return (isFinite(id) && id > 0) ? id : null;
       }
 
@@ -102,7 +98,9 @@
             for (const s of sels) {
                   const el = document.querySelector(s); if (!el) continue;
                   const raw = (el.getAttribute('content') || el.textContent || '').trim(); if (!raw) continue;
-                  const up = raw.toUpperCase(); const tokens = up.split(' ').filter(Boolean); const filtered = tokens.filter(t => t !== 'SKU' && t !== 'АРТИКУЛ' && t !== 'АРТИКУЛ:');
+                  const up = raw.toUpperCase();
+                  const tokens = up.split(' ').filter(Boolean);
+                  const filtered = tokens.filter(t => t !== 'SKU' && t !== 'АРТИКУЛ' && t !== 'АРТИКУЛ:');
                   if (filtered.length) return filtered[filtered.length - 1];
             }
             return null;
@@ -344,29 +342,11 @@
             __cpc.cartLinkBound = true;
       }
 
-      // ----- PV-guard
+      // ----- PV-guard (упрощённый: только regex + не мастер)
       function skuLooksLikeTech(sku) {
             // Разрешаем ТОЛЬКО: ПОЛІСОЛ-X-N и ПОЛІСОЛ-XX-N (X — 1–2 кир. буквы incl. ІЇЄҐ; N — 1..5)
             const re = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-[1-5]$/i;
             return re.test(String(sku || '').trim());
-      }
-      function isInPvCategory() {
-            // Доп. сигнал (если задан): пробуем вытащить categoryId из DOM/хеша
-            const pvId = getPvCategoryId();
-            if (!pvId) return false;
-
-            const ids = new Set();
-            const m = (location.hash || '').match(/[?&]category=(\d+)/);
-            if (m) ids.add(Number(m[1]));
-            document.querySelectorAll('a[href*="#!/c/"]').forEach(a => {
-                  const mm = (a.getAttribute('href') || '').match(/#!\/c\/(\d+)/);
-                  if (mm) ids.add(Number(mm[1]));
-            });
-            document.querySelectorAll('[data-category-id]').forEach(el => {
-                  const v = Number(el.getAttribute('data-category-id'));
-                  if (isFinite(v)) ids.add(v);
-            });
-            return ids.has(pvId);
       }
       function getPurchasePanel() {
             return document.querySelector('.product-details-module.product-details__action-panel.details-product-purchase');
@@ -425,18 +405,11 @@
             if (__cpc.pageType !== 'PRODUCT') return false;
 
             const sku = getSku() || __cpc.currentSku || '';
-            if (!sku || sku.indexOf(FAMILY_PREFIX) !== 0) return false;
-            if (!skuLooksLikeTech(sku)) return false;
+            if (!sku || sku.indexOf(FAMILY_PREFIX) !== 0) return false; // только семья POLISOL
+            if (!skuLooksLikeTech(sku)) return false;                   // строгий regex
+            if (isMasterPolisolPage()) return false;                    // мастер — не трогаем
 
-            // Мастер-карточку не трогаем
-            if (isMasterPolisolPage()) return false;
-
-            // Оверрайды
-            if (window.PV_FORCE_ON === true) return true;
-            if (Array.isArray(window.PV_PRODUCT_IDS) && window.PV_PRODUCT_IDS.includes(__cpc.currentProductId)) return true;
-
-            // Категория (если удастся вытащить из DOM/хеша)
-            return isInPvCategory();
+            return true;                                                // все остальные POLISOL → guard
       }
       function applyPvGuardIfNeeded() {
             if (shouldActivatePvGuard()) mountPvGuard();
