@@ -1,5 +1,5 @@
-/* POLISOL widget v2025-09-06-42  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-42)
+/* POLISOL widget v2025-09-06-43  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-43)
    - Жёсткий таргетинг мастер-карточки: работает ТОЛЬКО при page.productId === POLISOL_MASTER_PRODUCT_ID и SKU с префиксом "ПОЛІСОЛ-"
    - Анти-мерцание цены: дебаунс + запись в DOM только при реальном изменении
    - Сводка корзины на мастер-странице POLISOL
@@ -10,7 +10,7 @@
        * скрывает панель покупки и показывает ссылку «Перейти до кошика»
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-42 ready');
+      console.info('POLISOL widget v2025-09-06-43 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
