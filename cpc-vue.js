@@ -1,13 +1,16 @@
-/* POLISOL widget v2025-09-06-40  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-40)
+/* POLISOL widget v2025-09-06-41  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-41)
    - Жёсткий таргетинг мастер-карточки: работает ТОЛЬКО при page.productId === POLISOL_MASTER_PRODUCT_ID и SKU с префиксом "ПОЛІСОЛ-"
    - Анти-мерцание цены: дебаунс + запись в DOM только при реальном изменении
    - Сводка корзины на мастер-странице POLISOL
    - Предохранитель на CART
-   - PV-guard: на PRODUCT c SKU вида "ПОЛІСОЛ-*-NN" и в категории NUXT_PV_CATEGORY_ID скрываем панель покупки и показываем ссылку «До кошика»
+   - PV-guard: на PRODUCT со SKU вида "ПОЛІСОЛ-X-N" или "ПОЛІСОЛ-XX-N" (X кириллица 1–2, N ∈ {1..5})
+     скрываем панель покупки и показываем ссылку «Перейти до кошика».
+     Категория NUXT_PV_CATEGORY_ID используется как доп. сигнал (не обязательна).
+     Оверрайды: window.PV_FORCE_ON=true, window.PV_PRODUCT_IDS=[...]
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-40 ready');
+      console.info('POLISOL widget v2025-09-06-41 ready');
 
       const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -99,7 +102,7 @@
             for (const s of sels) {
                   const el = document.querySelector(s); if (!el) continue;
                   const raw = (el.getAttribute('content') || el.textContent || '').trim(); if (!raw) continue;
-                  const up = raw.toUpperCase(); const tokens = up.split(' ').filter(Boolean); const filtered = tokens.filter(t => t !== 'SKU');
+                  const up = raw.toUpperCase(); const tokens = up.split(' ').filter(Boolean); const filtered = tokens.filter(t => t !== 'SKU' && t !== 'АРТИКУЛ' && t !== 'АРТИКУЛ:');
                   if (filtered.length) return filtered[filtered.length - 1];
             }
             return null;
@@ -324,7 +327,7 @@
             return parts.join('|');
       }
 
-      // ----- Перехват «Оформити замовлення»
+      // ----- Перехват «Перейти до кошика» / «Оформити замовлення»
       function bindCartLinkHandler() {
             if (__cpc.cartLinkBound) return;
             document.addEventListener('click', (e) => {
@@ -341,54 +344,31 @@
             __cpc.cartLinkBound = true;
       }
 
-      // ----- PV-guard (блокировка панели покупки на «технических» товарах категории NUXT_PV_CATEGORY_ID)
-      /* function skuLooksLikeTech(sku) {
-            // Пример: "ПОЛІСОЛ-К-1", "ПОЛІСОЛ-Ж-15" и т.п. — т.е. есть суффикс "-NN" (число)
-            return /^ПОЛІСОЛ-.+?-\d+$/i.test(String(sku || '').trim());
-      } */
-
-      // Разрешаем только: ПОЛІСОЛ-X-N и ПОЛІСОЛ-XX-N
-      // где X — 1–2 кириллические буквы (включая укр. ІЇЄҐ), N — одна цифра 1..5
+      // ----- PV-guard
       function skuLooksLikeTech(sku) {
+            // Разрешаем ТОЛЬКО: ПОЛІСОЛ-X-N и ПОЛІСОЛ-XX-N (X — 1–2 кир. буквы incl. ІЇЄҐ; N — 1..5)
             const re = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-[1-5]$/i;
             return re.test(String(sku || '').trim());
       }
+      function isInPvCategory() {
+            // Доп. сигнал (если задан): пробуем вытащить categoryId из DOM/хеша
+            const pvId = getPvCategoryId();
+            if (!pvId) return false;
 
-      function parseCategoryFromHash() {
-            const h = location.hash || '';
-            const m = h.match(/[?&]category=(\d+)/);
-            return m ? Number(m[1]) : null;
-      }
-      function pageCategoriesCandidates() {
             const ids = new Set();
-
-            // из hash-параметра
-            const fromHash = parseCategoryFromHash();
-            if (isFinite(fromHash)) ids.add(fromHash);
-
-            // из хлебных крошек/ссылок
+            const m = (location.hash || '').match(/[?&]category=(\d+)/);
+            if (m) ids.add(Number(m[1]));
             document.querySelectorAll('a[href*="#!/c/"]').forEach(a => {
-                  const href = a.getAttribute('href') || '';
-                  const m = href.match(/#!\/c\/(\d+)/);
-                  if (m && m[1]) ids.add(Number(m[1]));
+                  const mm = (a.getAttribute('href') || '').match(/#!\/c\/(\d+)/);
+                  if (mm) ids.add(Number(mm[1]));
             });
-
-            // из data-атрибутов
             document.querySelectorAll('[data-category-id]').forEach(el => {
                   const v = Number(el.getAttribute('data-category-id'));
                   if (isFinite(v)) ids.add(v);
             });
-
-            return [...ids];
-      }
-      function isInPvCategory() {
-            const pvId = getPvCategoryId();
-            if (!pvId) return false;
-            const cands = pageCategoriesCandidates();
-            return cands.includes(pvId);
+            return ids.has(pvId);
       }
       function getPurchasePanel() {
-            // Хватаем основной контейнер покупки
             return document.querySelector('.product-details-module.product-details__action-panel.details-product-purchase');
       }
       function mountPvGuard() {
@@ -402,17 +382,31 @@
                   __cpc.pvHidden = true;
             }
 
-            // Вставляем замещающий блок (кнопка "До кошика")
-            const holder = document.createElement('div');
-            holder.id = 'polisol-pv-guard';
-            holder.setAttribute('style', 'margin:12px 0;display:flex;justify-content:center;');
-            holder.innerHTML = `
-      <a href="#!/cart" class="polisol-go-cart form-control__button form-control__button--icon-center"
-         style="display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:10px 16px;text-decoration:none;">
-        Перейти до кошика
-      </a>`;
-            // размещаем сразу после скрытой панели
+            // Создаём/размещаем замену
+            let holder = document.getElementById('polisol-pv-guard');
+            if (!holder) {
+                  holder = document.createElement('div');
+                  holder.id = 'polisol-pv-guard';
+                  holder.setAttribute('style', 'margin:12px 0;display:flex;justify-content:center;');
+                  holder.innerHTML = `
+        <a href="#!/cart" class="polisol-go-cart form-control__button form-control__button--icon-center"
+           style="display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:10px 16px;text-decoration:none;">
+          Перейти до кошика
+        </a>`;
+            }
             panel.parentNode.insertBefore(holder, panel.nextSibling);
+
+            // Fallback: если невидим (особенности лэйаута), ставим перед описанием
+            requestAnimationFrame(() => {
+                  const invisible = !holder.offsetParent || holder.offsetHeight === 0;
+                  if (invisible) {
+                        const descr = document.querySelector('#productDescription.product-details__product-description') || document.getElementById('productDescription');
+                        if (descr && descr.parentNode) {
+                              descr.parentNode.insertBefore(holder, descr);
+                        }
+                  }
+            });
+
             bindCartLinkHandler();
             __cpc.pvMounted = true;
       }
@@ -429,11 +423,20 @@
       }
       function shouldActivatePvGuard() {
             if (__cpc.pageType !== 'PRODUCT') return false;
-            const sku = getSku() || '';
-            if (!sku || sku.indexOf(FAMILY_PREFIX) !== 0) return false;    // только семья POLISOL
-            if (!skuLooksLikeTech(sku)) return false;                      // только тех SKU вида ПОЛІСОЛ-*-NN
-            if (isMasterPolisolPage()) return false;                       // мастер-карточку не трогаем
-            return isInPvCategory();                                       // и только внутри спецкатегории
+
+            const sku = getSku() || __cpc.currentSku || '';
+            if (!sku || sku.indexOf(FAMILY_PREFIX) !== 0) return false;
+            if (!skuLooksLikeTech(sku)) return false;
+
+            // Мастер-карточку не трогаем
+            if (isMasterPolisolPage()) return false;
+
+            // Оверрайды
+            if (window.PV_FORCE_ON === true) return true;
+            if (Array.isArray(window.PV_PRODUCT_IDS) && window.PV_PRODUCT_IDS.includes(__cpc.currentProductId)) return true;
+
+            // Категория (если удастся вытащить из DOM/хеша)
+            return isInPvCategory();
       }
       function applyPvGuardIfNeeded() {
             if (shouldActivatePvGuard()) mountPvGuard();
@@ -615,8 +618,7 @@
                   requestAnimationFrame(() => {
                         __cpc.moScheduled = false;
                         if (isMasterPolisolPage()) refreshUnitPriceDebounced();
-                        // держим PV-guard в актуальном состоянии при перестройках DOM
-                        applyPvGuardIfNeeded();
+                        applyPvGuardIfNeeded(); // держим PV-guard в актуальном состоянии при перестройках DOM
                   });
             });
             mo.observe(root, { childList: true, subtree: true }); __cpc.mo = mo;
@@ -803,12 +805,15 @@
                               scheduleCartSafetyCheck(60);
                         }
 
-                        // PV-guard (технические товары в спецкатегории)
+                        // PV-guard (технические карточки)
                         applyPvGuardIfNeeded();
 
                         // Только на МАСТЕР POLISOL — сводка/цены/перехват
-                        if (!isMasterPolisolPage()) { removeSummaryContainer(); }
-                        else {
+                        if (!isMasterPolisolPage()) {
+                              removeSummaryContainer();
+                              // На всех прочих страницах всё равно держим наблюдатель (для PV-guard)
+                              observeDom();
+                        } else {
                               ensureStyles();
                               ensureSummaryContainer();
                               bindCartLinkHandler();
@@ -826,11 +831,7 @@
 
                               await renderCartSummary();
                               refreshUnitPriceDebounced();
-                              return;
                         }
-
-                        // На всех прочих страницах всё равно держим наблюдатель (для PV-guard)
-                        observeDom();
                   });
             });
       });
