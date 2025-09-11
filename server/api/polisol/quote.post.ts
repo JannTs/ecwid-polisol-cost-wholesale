@@ -1,4 +1,6 @@
-// server/api/polisol/quote.post.ts v43
+// server/api/polisol/quote.post.ts
+// v44 — техтовар из вариации мастер-товара + customSlug + загрузка картинки вариации
+//     + присвоение категории PV (NUXT_PV_CATEGORY_ID) при создании/обновлении
 import { defineEventHandler, readBody, setResponseHeader, createError } from 'h3';
 import { EcwidClient } from '~~/utils/ecwid';
 import {
@@ -11,7 +13,7 @@ import {
 
 const FAMILY_PREFIX = 'ПОЛІСОЛ-';
 
-// ASCII-ключи для CLI/интеграций без кириллицы
+// ASCII-ключи для CLI/интеграций без кириллицы (опционально)
 const KEY_TO_CANON: Record<string, string> = {
   classic: 'Класичний',
   mans: 'Чоловіча Сила',
@@ -25,12 +27,11 @@ const KEY_TO_CANON: Record<string, string> = {
 
 function buildProductName(humanLabel: string, batchCount: number, kvas: boolean): string {
   if (kvas) return `${humanLabel} (ціна в партії ${batchCount})`;
-  // гарантируем пробел между ™ и «»
   const quoted = humanLabel.match(/[«»]/) ? humanLabel : `«${humanLabel}»`;
   return `ПОЛІСОЛ™ ${quoted} (ціна в партії ${batchCount})`;
 }
 
-// Новый: безопасный fetch к Ecwid REST
+/** ---- Ecwid REST helpers (локально, без зависимостей проекта) ---- */
 async function ecwidFetch(path: string, qs: Record<string, any> = {}, opts: RequestInit = {}) {
   const { NUXT_ECWID_STORE_ID, NUXT_ECWID_TOKEN } = useRuntimeConfig();
   const u = new URL(`https://app.ecwid.com/api/v3/${NUXT_ECWID_STORE_ID}${path}`);
@@ -56,21 +57,20 @@ async function ecwidFetch(path: string, qs: Record<string, any> = {}, opts: Requ
   return json ?? {};
 }
 
-// Новый: найти мастер по базовому SKU вариации ("ПОЛІСОЛ-Ш", без индекса)
+// Найти мастер-товар по базовому SKU вариации (например, "ПОЛІСОЛ-Ш")
 async function findMasterByBaseSku(baseSku: string) {
-  // Ecwid вернёт товар, содержащий этот SKU (включая SKU вариаций). Требуется точное совпадение. :contentReference[oaicite:2]{index=2}
+  // Ecwid ищет по точному SKU (включая SKU вариаций)
   const j = await ecwidFetch('/products', { sku: baseSku });
   const items = Array.isArray(j?.items) ? j.items : [];
-  return items[0] || null; // ожидаем, что это мастер
+  return items[0] || null;
 }
 
-// Новый: прочитать товар целиком (с combinations и image URLs)
+// Прочитать товар полностью (нужны combinations с imageUrl/…)
 async function getProductFull(productId: number) {
-  // В ответе поля вариаций содержат thumbnailUrl / imageUrl / smallThumbnailUrl / hdThumbnailUrl / originalImageUrl. :contentReference[oaicite:3]{index=3}
   return await ecwidFetch(`/products/${productId}`);
 }
 
-// Новый: вытащить URL исходной картинки вариации по её базовому SKU
+// Вытянуть URL исходной картинки вариации по её базовому SKU
 function pickVariationOriginalUrl(product: any, baseSku: string): string | null {
   const combos = Array.isArray(product?.combinations) ? product.combinations : [];
   const v = combos.find((c: any) => (c?.sku || '').trim() === baseSku);
@@ -84,21 +84,27 @@ function pickVariationOriginalUrl(product: any, baseSku: string): string | null 
   return url || null;
 }
 
-// Новый: загрузить основную картинку вновь созданному товару «по ссылке» вариации
+// Загрузить основную картинку для созданного товара по внешней ссылке
 async function uploadMainImageByExternalUrl(productId: number, externalUrl: string) {
-  // Ecwid сам создаст все размеры на базе одного файла; дополнительные размеры загружать не требуется. :contentReference[oaicite:4]{index=4}
+  // Ecwid сам создаёт все размеры на базе одного файла
   await ecwidFetch(`/products/${productId}/image`, { externalUrl }, { method: 'POST' });
 }
 
-// Новый: генерация customSlug (кириллица поддерживается Ecwid, но при желании можно сделать транслитерацию)
-function buildCustomSlug(suffix: string, idx: number, kvas: boolean) {
-  // Пример: "ПОЛІСОЛ-Ш-1-ОПТОМ" / "ПОЛІСОЛ-КВ-2-ОПТОМ"
+// Человекочитаемый slug (можно заменить на транслитерацию)
+function buildCustomSlug(suffix: string, idx: number, _kvas: boolean) {
+  // Примеры: "ПОЛІСОЛ-Ш-1-ОПТОМ", "ПОЛІСОЛ-КВ-2-ОПТОМ"
   const tail = 'ОПТОМ';
   return `${FAMILY_PREFIX}${suffix}-${idx}-${tail}`;
 }
 
+// Утилита выбора валидной категорийки (PV приоритетно)
+const toNum = (v: any) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
+
 export default defineEventHandler(async (event) => {
-  // CORS
+  // CORS (при необходимости)
   setResponseHeader(event, 'Access-Control-Allow-Origin', '*');
   setResponseHeader(event, 'Access-Control-Allow-Headers', 'Content-Type, Authorization');
   setResponseHeader(event, 'Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -106,18 +112,26 @@ export default defineEventHandler(async (event) => {
   const {
     NUXT_ECWID_STORE_ID,
     NUXT_ECWID_TOKEN,
+    NUXT_PV_CATEGORY_ID, // ← добавлено в v44
     NUXT_ECWID_WHOLESALE_CATEGORY_ID,
     NUXT_ECWID_TECH_CATEGORY_ID,
     NUXT_ECWID_CATEGORY_ID,
   } = useRuntimeConfig();
 
+  // Итоговый ID категории для техтоваров: PV > TECH > WHOLESALE > DEFAULT
+  const pvCategoryId =
+    toNum(NUXT_PV_CATEGORY_ID) ??
+    toNum(NUXT_ECWID_TECH_CATEGORY_ID) ??
+    toNum(NUXT_ECWID_WHOLESALE_CATEGORY_ID) ??
+    toNum(NUXT_ECWID_CATEGORY_ID);
+
   const body = await readBody<{
     contentLabel?: string;
-    contentKey?: string; // ASCII-альтернатива
+    contentKey?: string;
     batchIndex?: number; // 1..5
   }>(event);
 
-  // Выбираем label либо по contentKey
+  // Нормализация входа
   let humanLabel = (body?.contentLabel || '').trim();
   if (!humanLabel && body?.contentKey) {
     const key = String(body.contentKey).trim().toLowerCase();
@@ -155,47 +169,49 @@ export default defineEventHandler(async (event) => {
   const batchCount = BATCH_INDEX_TO_COUNT[idx]; // 15..75
   const sku = `${FAMILY_PREFIX}${suffix}-${idx}`;
   const name = buildProductName(humanLabel, batchCount, isKvas(canon));
-  const client = new EcwidClient(String(NUXT_ECWID_STORE_ID), String(NUXT_ECWID_TOKEN));
-  const categoryId =
-    Number(
-      NUXT_ECWID_WHOLESALE_CATEGORY_ID || NUXT_ECWID_TECH_CATEGORY_ID || NUXT_ECWID_CATEGORY_ID || 0
-    ) || undefined;
 
-  // --- Новый блок: подготовим данные вариации мастер-товара (для картинки и, при желании, проверки batch)
+  const client = new EcwidClient(String(NUXT_ECWID_STORE_ID), String(NUXT_ECWID_TOKEN));
+
+  // Подготовим данные вариации мастер-товара (для картинки)
   const baseVariationSku = `${FAMILY_PREFIX}${suffix}`; // без -idx
   let variationImageUrl: string | null = null;
 
   try {
-    const master = await findMasterByBaseSku(baseVariationSku); // точный поиск по SKU вариации. :contentReference[oaicite:5]{index=5}
+    const master = await findMasterByBaseSku(baseVariationSku);
     if (master?.id) {
-      const full = await getProductFull(master.id); // нужен массив combinations + ссылки картинок. :contentReference[oaicite:6]{index=6}
+      const full = await getProductFull(master.id);
       variationImageUrl = pickVariationOriginalUrl(full, baseVariationSku);
     }
   } catch (e) {
-    // ничего критичного: просто не поставим картинку при создании
     console.warn('[POLISOL quote] failed to load variation image', e);
   }
 
   try {
-    // 1) Ищем по SKU (идемпотентность)
+    // 1) Идемпотентный поиск по SKU
     const existing = await client.findFirstProductBySku(sku);
     if (existing) {
       const patch: any = {};
       if (existing.name !== name) patch.name = name;
       if (Number(existing.price) !== Number(price)) patch.price = price;
-      if (
-        categoryId &&
-        (!Array.isArray(existing.categoryIds) || existing.categoryIds[0] !== categoryId)
-      ) {
-        patch.categoryIds = [categoryId];
+
+      // v44: мягко ДОБАВЛЯЕМ PV-категорию, не затирая остальные
+      if (pvCategoryId) {
+        const existingIds = Array.isArray(existing.categoryIds)
+          ? existing.categoryIds
+              .map((x: any) => Number(x))
+              .filter((n: number) => Number.isFinite(n))
+          : [];
+        if (!existingIds.includes(pvCategoryId)) {
+          patch.categoryIds = Array.from(new Set([...existingIds, pvCategoryId]));
+        }
       }
-      // Если не было слага – зададим (мягко, чтобы не ломать уже ручные правки)
+
+      // Если не было слага – зададим (мягко, чтобы не ломать ручные правки)
       if (!existing.customSlug) {
         patch.customSlug = buildCustomSlug(suffix, idx, isKvas(canon));
       }
       if (Object.keys(patch).length) await client.updateProduct(existing.id, patch);
 
-      // Если у существующего товара нет основной картинки, а у вариации есть — загрузим
       if (!existing?.imageUrl && variationImageUrl) {
         await uploadMainImageByExternalUrl(existing.id, variationImageUrl);
       }
@@ -203,31 +219,29 @@ export default defineEventHandler(async (event) => {
       return { ok: true, productId: existing.id, unitPrice: price, batchIndex: idx, batchCount };
     }
 
-    // 2) Создаём новый «технічний» товар
+    // 2) Создание «технічного» товара
     const payload: any = {
       name,
       sku,
       price,
       enabled: true,
-      customSlug: buildCustomSlug(suffix, idx, isKvas(canon)), // <- читаемый URL-хвост
+      customSlug: buildCustomSlug(suffix, idx, isKvas(canon)),
       description: `Оптова ціна для партії ${batchCount} шт. Вміст: ${humanLabel}.`,
       attributes: [
         { name: 'Партія', value: String(batchCount) },
         { name: 'Вміст', value: humanLabel },
       ],
     };
-    if (categoryId) payload.categoryIds = [categoryId];
+    if (pvCategoryId) payload.categoryIds = [pvCategoryId];
 
     const created = await client.createProduct(payload);
 
-    // Подтянем основную картинку с вариации, если нашли URL
     if (variationImageUrl) {
-      await uploadMainImageByExternalUrl(created.id, variationImageUrl); // загрузка по внешней ссылке. :contentReference[oaicite:7]{index=7}
+      await uploadMainImageByExternalUrl(created.id, variationImageUrl);
     }
 
     return { ok: true, productId: created.id, unitPrice: price, batchIndex: idx, batchCount };
   } catch (e: any) {
-    // Пробрасываем подробности наружу (в т.ч. 403 от Ecwid)
     const statusGuess = Number(e?._status) || Number(e?.statusCode) || 502;
     throw createError({
       statusCode: statusGuess,
