@@ -1,4 +1,4 @@
-// utils/tenant.ts
+// utils/tenant.ts - v46
 // Выбор тестового/продового "тенанта" по query ?tenant=test|prod или заголовку x-tenant
 import { getQuery, getRequestHeaders } from 'h3';
 import { useRuntimeConfig } from '#imports';

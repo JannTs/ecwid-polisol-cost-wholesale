@@ -1,4 +1,4 @@
-// server/api/polisol/pricing.get.ts
+// server/api/polisol/pricing.get.ts - v46
 
 import { defineEventHandler, setResponseHeader } from 'h3';
 import { PRICING_TABLE, SUFFIX_BY_CONTENT, BATCH_INDEX_TO_COUNT } from '~~/utils/polisol';

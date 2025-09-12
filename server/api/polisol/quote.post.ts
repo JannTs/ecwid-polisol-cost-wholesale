@@ -1,4 +1,4 @@
-// server/api/polisol/quote.post.ts
+// server/api/polisol/quote.post.ts - v46
 // v45-tenant — на базе вашей текущей версии:
 //   + поддержка двух тенантов (test/prod) через utils/tenant
 //   + мягкое присвоение категории PV (NUXT_PV_CATEGORY_ID__*)
