@@ -1,5 +1,5 @@
 // server/api/polisol/quote.post.ts - v46
-// v45-tenant — на базе вашей текущей версии:
+// v45-tenant — на  базе вашей текущей версии:
 //   + поддержка двух тенантов (test/prod) через utils/tenant
 //   + мягкое присвоение категории PV (NUXT_PV_CATEGORY_ID__*)
 //   + customSlug для SEO (ПОЛІСОЛ-<суф>-<idx>-ОПТОМ)
@@ -122,6 +122,14 @@ export default defineEventHandler(async (event) => {
   // Контекст выбранного тенанта
   const ctxAll = getTenantCtx(event);
   const ctx: TenantCtx = { storeId: ctxAll.storeId, token: ctxAll.token };
+  if (!ctx.storeId || !ctx.token) {
+    throw createError({
+      statusCode: 500,
+      statusMessage: 'Server misconfiguration',
+      message: `Missing ECWID credentials for tenant=${ctxAll.tenant}`,
+    });
+  }
+
   const pvCategoryId = ctxAll.pvCategoryId;
 
   const body = await readBody<{

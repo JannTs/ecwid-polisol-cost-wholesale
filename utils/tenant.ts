@@ -1,5 +1,4 @@
 // utils/tenant.ts - v46
-// Выбор тестового/продового "тенанта" по query ?tenant=test|prod или заголовку x-tenant
 import { getQuery, getRequestHeaders } from 'h3';
 import { useRuntimeConfig } from '#imports';
 
@@ -13,11 +12,14 @@ export function pickTenant(event): Tenant {
 }
 
 export function getTenantCtx(event) {
-  const cfg = useRuntimeConfig() as any;
+  const cfg = (useRuntimeConfig?.() as any) || {};
+  const env = (process?.env as any) || {};
   const tenant: Tenant = pickTenant(event);
   const suff = `__${tenant}`; // напр. NUXT_ECWID_STORE_ID__test
 
-  const pick = (key: string) => cfg[`${key}${suff}`] ?? cfg[key];
+  // читаем из runtimeConfig, если нет — берём из process.env
+  const pick = (key: string) =>
+    cfg[`${key}${suff}`] ?? cfg[key] ?? env[`${key}${suff}`] ?? env[key];
 
   const toNum = (v: any) => {
     const n = Number(v);
