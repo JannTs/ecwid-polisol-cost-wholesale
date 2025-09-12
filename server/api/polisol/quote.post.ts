@@ -1,10 +1,7 @@
-// server/api/polisol/quote.post.ts - v46
-// v45-tenant — на  базе вашей текущей версии:
-//   + поддержка двух тенантов (test/prod) через utils/tenant
-//   + мягкое присвоение категории PV (NUXT_PV_CATEGORY_ID__*)
-//   + customSlug для SEO (ПОЛІСОЛ-<суф>-<idx>-ОПТОМ)
-//   + подтягивание картинки из вариации мастер-товара по базовому SKU (ПОЛІСОЛ-<суф>)
-//   + идемпотентность по SKU (как и было)
+// server/api/polisol/quote.post.ts - v48
+// server/api/polisol/quote.post.ts
+// v48-tenant — customSlug кирилицею: "полісол-{вміст}-{N}-банок" (нижній регістр)
+// + як і раніше: multi-tenant (test/prod), PV-категорія, картинка з варіації, ідемпотентність по SKU
 import { defineEventHandler, readBody, setResponseHeader, createError } from 'h3';
 import { EcwidClient } from '~~/utils/ecwid';
 import {
@@ -18,26 +15,48 @@ import { getTenantCtx } from '~~/utils/tenant';
 
 const FAMILY_PREFIX = 'ПОЛІСОЛ-';
 
-// ASCII-ключи для CLI/интеграций без кириллицы (опционно)
 const KEY_TO_CANON: Record<string, string> = {
   classic: 'Класичний',
   mans: 'Чоловіча Сила',
-  mother: "Матусине Здоров'я",
+  mother: "Матусине здоров'я",
   rosehip: 'Шипшина',
   cranberry: 'Журавлина',
   kvas: 'Квас трипільський',
   kvas_white: 'Квас трипільський (білий)',
   kvas_coriander: 'Квас трипільський з коріандром',
+  // альтернативи з фронта
+  cholovicha: 'Чоловіча Сила',
+  matusyne: "Матусине здоров'я",
+  kvas_bilyi: 'Квас трипільський (білий)',
+  kvas_koriandr: 'Квас трипільський з коріандром',
 };
 
 function buildProductName(humanLabel: string, batchCount: number, kvas: boolean): string {
   if (kvas) return `${humanLabel} (ціна в партії ${batchCount})`;
-  // гарантируем пробел между ™ и «»
   const quoted = humanLabel.match(/[«»]/) ? humanLabel : `«${humanLabel}»`;
   return `ПОЛІСОЛ™ ${quoted} (ціна в партії ${batchCount})`;
 }
 
-/** --------- Ecwid REST helpers (per-tenant) --------- */
+/** ---------- UA slug helpers (кирилиця, нижній регістр) ---------- */
+function normalizeApostrophes(s: string): string {
+  return String(s || '')
+    .replace(/[`´’ʼ′]/g, "'") // уніфікуємо апостроф
+    .replace(/[«»"]/g, ''); // прибираємо лапки
+}
+function toCyrSlug(s: string): string {
+  // лишаемо букви/цифри; решту → дефіс; схлопуємо дефіси; прибираємо крайні
+  return normalizeApostrophes(s)
+    .toLowerCase()
+    .replace(/[^0-9\p{L}]+/gu, '-') // усе не літера/цифра → '-'
+    .replace(/-+/g, '-') // схлопнути повтори '-'
+    .replace(/^-|-$/g, ''); // обрізати краї
+}
+function buildCyrCustomSlug(canonContent: string, batchCount: number): string {
+  // приклад: "полісол-класичний-15-банок"
+  return toCyrSlug(`полісол ${canonContent} ${batchCount} банок`);
+}
+
+/** ---- Ecwid REST (per-tenant) ---- */
 type TenantCtx = { storeId: string; token: string };
 async function ecwidFetch(
   ctx: TenantCtx,
@@ -68,20 +87,14 @@ async function ecwidFetch(
   return json ?? {};
 }
 
-// Найти мастер-товар по базовому SKU вариации (например, "ПОЛІСОЛ-Ш")
 async function findMasterByBaseSku(ctx: TenantCtx, baseSku: string) {
-  // Ecwid ищет по ТOЧНОМУ SKU (включая SKU вариаций)
   const j = await ecwidFetch(ctx, '/products', { sku: baseSku });
   const items = Array.isArray(j?.items) ? j.items : [];
   return items[0] || null;
 }
-
-// Прочитать товар полностью (нужны combinations с imageUrl/…)
 async function getProductFull(ctx: TenantCtx, productId: number) {
   return await ecwidFetch(ctx, `/products/${productId}`);
 }
-
-// Вытянуть URL исходной картинки вариации по её базовому SKU
 function pickVariationOriginalUrl(product: any, baseSku: string): string | null {
   const combos = Array.isArray(product?.combinations) ? product.combinations : [];
   const v = combos.find((c: any) => (c?.sku || '').trim() === baseSku);
@@ -94,34 +107,24 @@ function pickVariationOriginalUrl(product: any, baseSku: string): string | null 
     null;
   return url || null;
 }
-
-// Загрузить основную картинку для созданного товара по внешней ссылке
 async function uploadMainImageByExternalUrl(
   ctx: TenantCtx,
   productId: number,
   externalUrl: string
 ) {
-  // Ecwid сам создаёт все размеры на базе одного файла
   await ecwidFetch(ctx, `/products/${productId}/image`, { externalUrl }, { method: 'POST' });
-}
-
-// Человекочитаемый slug (можно заменить на транслитерацию)
-function buildCustomSlug(suffix: string, idx: number, _kvas: boolean) {
-  // Примеры: "ПОЛІСОЛ-Ш-1-ОПТОМ", "ПОЛІСОЛ-КВ-2-ОПТОМ"
-  const tail = 'ОПТОМ';
-  return `${FAMILY_PREFIX}${suffix}-${idx}-${tail}`;
 }
 
 /** --------------------- Handler --------------------- */
 export default defineEventHandler(async (event) => {
-  // CORS
   setResponseHeader(event, 'Access-Control-Allow-Origin', '*');
   setResponseHeader(event, 'Access-Control-Allow-Headers', 'Content-Type, Authorization');
   setResponseHeader(event, 'Access-Control-Allow-Methods', 'POST, OPTIONS');
 
-  // Контекст выбранного тенанта
   const ctxAll = getTenantCtx(event);
   const ctx: TenantCtx = { storeId: ctxAll.storeId, token: ctxAll.token };
+
+  // явная проверка конфігурації
   if (!ctx.storeId || !ctx.token) {
     throw createError({
       statusCode: 500,
@@ -130,21 +133,19 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const pvCategoryId = ctxAll.pvCategoryId;
-
   const body = await readBody<{
     contentLabel?: string;
-    contentKey?: string; // ASCII-alias
+    contentKey?: string;
     batchIndex?: number; // 1..5
+    customSlug?: string; // опціонально — якщо хочеш задати вручну
   }>(event);
 
-  // Выбираем label либо по contentKey
+  // Нормалізація входу
   let humanLabel = (body?.contentLabel || '').trim();
   if (!humanLabel && body?.contentKey) {
     const key = String(body.contentKey).trim().toLowerCase();
     if (KEY_TO_CANON[key]) humanLabel = KEY_TO_CANON[key];
   }
-
   const idx = Number(body?.batchIndex || 0);
   if (!humanLabel || !idx || idx < 1 || idx > 5) {
     throw createError({
@@ -154,7 +155,7 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const canon = toCanonLabel(humanLabel);
+  const canon = toCanonLabel(humanLabel); // канонічна назва «Вмісту»
   const suffix = SUFFIX_BY_CONTENT[canon];
   if (!suffix) {
     throw createError({
@@ -177,13 +178,17 @@ export default defineEventHandler(async (event) => {
   const sku = `${FAMILY_PREFIX}${suffix}-${idx}`;
   const name = buildProductName(humanLabel, batchCount, isKvas(canon));
 
-  // Ecwid client для выбранного тенанта
+  // Визначаємо бажаний slug: або з тіла, або генеруємо кириличний
+  const explicitSlug = typeof body?.customSlug === 'string' && body.customSlug.trim().length > 0;
+  const desiredSlug = explicitSlug
+    ? toCyrSlug(body!.customSlug!)
+    : buildCyrCustomSlug(canon, batchCount);
+
   const client = new EcwidClient(ctxAll.storeId, ctxAll.token);
 
-  // Подготовим данные вариации мастер-товара (для картинки)
-  const baseVariationSku = `${FAMILY_PREFIX}${suffix}`; // без -idx
+  // Картинка з варіації (по базовому SKU, без -idx)
+  const baseVariationSku = `${FAMILY_PREFIX}${suffix}`;
   let variationImageUrl: string | null = null;
-
   try {
     const master = await findMasterByBaseSku(ctx, baseVariationSku);
     if (master?.id) {
@@ -195,28 +200,30 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    // 1) Идемпотентный поиск по SKU
+    // 1) Ідемпотентність по SKU
     const existing = await client.findFirstProductBySku(sku);
     if (existing) {
       const patch: any = {};
       if (existing.name !== name) patch.name = name;
       if (Number(existing.price) !== Number(price)) patch.price = price;
 
-      // v45: мягко ДОБАВЛЯЕМ PV-категорию, не затирая остальные
-      if (pvCategoryId) {
+      // Додаємо PV-категорію м'яко
+      if (ctxAll.pvCategoryId) {
         const existingIds = Array.isArray(existing.categoryIds)
           ? existing.categoryIds
               .map((x: any) => Number(x))
               .filter((n: number) => Number.isFinite(n) && n > 0)
           : [];
-        if (!existingIds.includes(pvCategoryId)) {
-          patch.categoryIds = Array.from(new Set([...existingIds, pvCategoryId]));
+        if (!existingIds.includes(ctxAll.pvCategoryId)) {
+          patch.categoryIds = Array.from(new Set([...existingIds, ctxAll.pvCategoryId]));
         }
       }
 
-      // Если не было слага – зададим (мягко, чтобы не ломать ручные правки)
-      if (!existing.customSlug) {
-        patch.customSlug = buildCustomSlug(suffix, idx, isKvas(canon));
+      // customSlug: якщо прийшов явно — ставимо; якщо пусто — ставимо згенерований
+      if (explicitSlug) {
+        patch.customSlug = desiredSlug;
+      } else if (!existing.customSlug) {
+        patch.customSlug = desiredSlug;
       }
 
       if (Object.keys(patch).length) await client.updateProduct(existing.id, patch);
@@ -228,20 +235,20 @@ export default defineEventHandler(async (event) => {
       return { ok: true, productId: existing.id, unitPrice: price, batchIndex: idx, batchCount };
     }
 
-    // 2) Создание «технічного» товара
+    // 2) Створення
     const payload: any = {
       name,
       sku,
       price,
       enabled: true,
-      customSlug: buildCustomSlug(suffix, idx, isKvas(canon)),
+      customSlug: desiredSlug, // кириличний slug при створенні
       description: `Оптова ціна для партії ${batchCount} шт. Вміст: ${humanLabel}.`,
       attributes: [
         { name: 'Партія', value: String(batchCount) },
         { name: 'Вміст', value: humanLabel },
       ],
     };
-    if (pvCategoryId) payload.categoryIds = [pvCategoryId];
+    if (ctxAll.pvCategoryId) payload.categoryIds = [ctxAll.pvCategoryId];
 
     const created = await client.createProduct(payload);
 
