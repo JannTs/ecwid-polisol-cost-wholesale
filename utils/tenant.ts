@@ -1,6 +1,7 @@
 // utils/tenant.ts
 // Выбор тестового/продового "тенанта" по query ?tenant=test|prod или заголовку x-tenant
 import { getQuery, getRequestHeaders } from 'h3';
+import { useRuntimeConfig } from '#imports';
 
 export type Tenant = 'test' | 'prod';
 
@@ -14,7 +15,7 @@ export function pickTenant(event): Tenant {
 export function getTenantCtx(event) {
   const cfg = useRuntimeConfig() as any;
   const tenant: Tenant = pickTenant(event);
-  const suff = `__${tenant}`; // например: NUXT_ECWID_STORE_ID__test
+  const suff = `__${tenant}`; // напр. NUXT_ECWID_STORE_ID__test
 
   const pick = (key: string) => cfg[`${key}${suff}`] ?? cfg[key];
 

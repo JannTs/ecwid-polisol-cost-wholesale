@@ -138,7 +138,7 @@
                   const v = extractAllowedNumber(sel.value, [15, 30, 45, 60, 75]); return v != null ? v : null;
             }
             const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
-            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? v : null;
+            const vv = extractAllowedNumber(txt, [15, 30, 45, 60, 75]); return vv != null ? vv : null;
       }
       const batchCountToIndex = (n) => (n === 15 ? 1 : (n === 30 ? 2 : (n === 45 ? 3 : (n === 60 ? 4 : (n === 75 ? 5 : null)))));
       const batchLimitByIndex = (idx) => (idx === 1 ? 15 : (idx === 2 ? 30 : (idx === 3 ? 45 : (idx === 4 ? 60 : (idx === 5 ? 75 : null)))));
