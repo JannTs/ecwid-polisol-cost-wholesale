@@ -1,12 +1,12 @@
-/* POLISOL widget v2025-09-06-46-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-46-tenant)
+/* POLISOL widget v2025-09-12-48-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-12-48-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-06-44.
+   - Остальная логика — как в v2025-09-12-48-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-46-tenant ready');
+      console.info('POLISOL widget v2025-09-12-48-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
