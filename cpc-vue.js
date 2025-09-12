@@ -1,12 +1,12 @@
-/* POLISOL widget v2025-09-12-49-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-12-49-tenant)
+/* POLISOL widget v2025-09-12-50-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-12-50-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-12-49-tenant.
+   - Остальная логика — как в v2025-09-12-50-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-12-49-tenant ready');
+      console.info('POLISOL widget v2025-09-12-50-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -841,104 +841,63 @@
                   });
             });
       });
-      /* ===== CART agreement guard (prod only) ===== */
+      /* === Simple CART agree-lock (prod only) === */
       (function () {
             const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
             if (TENANT !== 'prod') return; // на test не трогаем
 
-            // Маппинг индекса партии → размер партии
             const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
+            const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
 
-            // Парсим суффикс индекса из SKU вида "ПОЛІСОЛ-Х-3"
-            function readPolisolIndexFromSku(sku) {
-                  const m = String(sku || '').trim().match(/^ПОЛІСОЛ-.+?-(\d)$/i);
-                  return m ? parseInt(m[1], 10) : null;
-            }
+            function lockAgree() {
+                  const last = (window.Ecwid && Ecwid.getLastPage && Ecwid.getLastPage()) || {};
+                  if (last.type !== 'CART') return;
 
-            // Считаем по корзине: всего банок POLISOL, валидный ли набор, какой лимит партии
-            function calcPolisolCartState(cart) {
-                  const items = Array.isArray(cart?.items) ? cart.items : [];
-                  let totalQty = 0;
-                  let idx = null;
-                  let valid = true;
-                  for (const it of items) {
-                        const sku = it?.product?.sku || it?.sku || '';
-                        if (!/^ПОЛІСОЛ-/i.test(sku)) continue; // считаем только POLISOL
-                        const thisIdx = readPolisolIndexFromSku(sku);
-                        if (!thisIdx || !IDX2COUNT[thisIdx]) { valid = false; continue; }
-                        if (idx == null) idx = thisIdx;
-                        if (idx !== thisIdx) valid = false;            // смешаны разные партии
-                        totalQty += Number(it.quantity || 0);
-                  }
-                  const batchCount = idx ? IDX2COUNT[idx] : null;
-                  return { totalQty, batchCount, valid };
-            }
+                  const agreeWrap = document.querySelector('.ec-cart__agreement');
+                  const checkbox = document.getElementById('form-control__checkbox--agree');
+                  if (!agreeWrap || !checkbox) return; // на проде блок есть, на тесте — нет
 
-            // Применяем (де)активацию чекбокса и, на всякий, визуально сереем подпись
-            function applyAgreementDisabled(disabled) {
-                  const agreeBox = document.getElementById('form-control__checkbox--agree');
-                  if (!agreeBox) return;
-                  const label = document.querySelector('label[for="form-control__checkbox--agree"]');
-                  agreeBox.disabled = !!disabled;
-                  if (disabled) {
-                        agreeBox.checked = false;
-                        if (label) { label.style.opacity = '0.6'; label.style.pointerEvents = 'none'; }
-                  } else {
-                        if (label) { label.style.opacity = ''; label.style.pointerEvents = ''; }
-                  }
-            }
-
-            // Главная проверка
-            function reevaluateCartAgreement() {
-                  const agreement = document.querySelector('.ec-cart__agreement');
-                  if (!agreement) return; // на некоторых шаблонах/витринах блока нет — ничего не делаем
                   Ecwid.Cart.get(function (cart) {
-                        const { totalQty, batchCount, valid } = calcPolisolCartState(cart || {});
-                        // Если в корзине НЕТ POLISOL — не блокируем чекбокс (пусть обычный чекаут работает)
-                        if (!batchCount) { applyAgreementDisabled(false); return; }
-                        // Блокируем, если: смешаны партии, либо сумма != размеру партии
-                        const disable = !valid || (totalQty !== batchCount);
-                        applyAgreementDisabled(disable);
-                        // (опц.) можно вывести подсказку "залишилось N із M" — пока не делаем
+                        const items = Array.isArray(cart?.items) ? cart.items : [];
+                        let hasPol = false, idx = null, total = 0, mixed = false;
+
+                        for (const it of items) {
+                              const sku = (it?.product?.sku || it?.sku || '').trim();
+                              const m = sku.match(skuRe);
+                              if (!m) continue;
+                              hasPol = true;
+                              const i = parseInt(m[1], 10);
+                              if (idx == null) idx = i; else if (idx !== i) mixed = true;
+                              total += Number(it.quantity || 0);
+                        }
+
+                        if (!hasPol) { // нет POLISOL в корзине — не блокируем
+                              checkbox.disabled = false;
+                              return;
+                        }
+
+                        const batch = idx ? IDX2COUNT[idx] : null;
+                        const valid = !mixed && batch != null && total === batch;
+
+                        checkbox.disabled = !valid;
+                        if (!valid) checkbox.checked = false; // на всякий случай
                   });
             }
 
-            // Дебаунс на случай частых мутаций DOM
-            let t;
-            function debouncedReeval() { clearTimeout(t); t = setTimeout(reevaluateCartAgreement, 120); }
-
-            // Монтируем на CART
-            function mountCartGuardIfNeeded(page) {
-                  const type = page?.type || (window.Ecwid && Ecwid.getLastPage && Ecwid.getLastPage()?.type);
-                  if (type !== 'CART') return;
-                  // Первый прогон
-                  debouncedReeval();
-
-                  // Подписка на изминения корзины
-                  if (window.Ecwid && Ecwid.OnCartChanged && !mountCartGuardIfNeeded._subscribed) {
-                        Ecwid.OnCartChanged.add(debouncedReeval);
-                        mountCartGuardIfNeeded._subscribed = true;
-                  }
-
-                  // На случай перерисовок DOM — наблюдатель за секцией корзины
+            // запуск и подписки
+            function initCartLock() {
+                  lockAgree();
+                  if (initCartLock._bound) return;
+                  initCartLock._bound = true;
+                  Ecwid.OnCartChanged.add(lockAgree);
+                  Ecwid.OnPageSwitch.add(lockAgree);
                   const root = document.querySelector('.ec-cart') || document.body;
-                  if (!mountCartGuardIfNeeded._mo && root) {
-                        const mo = new MutationObserver(debouncedReeval);
-                        mo.observe(root, { childList: true, subtree: true });
-                        mountCartGuardIfNeeded._mo = mo;
-                  }
+                  new MutationObserver(() => lockAgree()).observe(root, { childList: true, subtree: true });
             }
 
-            // Хуки Ecwid SPA
-            if (window.Ecwid && Ecwid.OnPageLoaded) {
-                  Ecwid.OnPageLoaded.add(mountCartGuardIfNeeded);
-            }
-            if (window.Ecwid && Ecwid.OnPageSwitch) {
-                  Ecwid.OnPageSwitch.add(mountCartGuardIfNeeded);
-            }
-
-            // На прямой заход в корзину
-            document.addEventListener('DOMContentLoaded', () => mountCartGuardIfNeeded({ type: (window.ecwid_last_page_type || null) }));
+            if (window.Ecwid && Ecwid.OnPageLoaded) Ecwid.OnPageLoaded.add(initCartLock);
+            document.addEventListener('DOMContentLoaded', initCartLock);
       })();
+
 
 })();
