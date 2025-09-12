@@ -1,16 +1,24 @@
-/* POLISOL widget v2025-09-06-44  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-44)
+/* POLISOL widget v2025-09-06-45-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-06-45-tenant)
    Новое:
    - Глобальный Loading Overlay на время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-06-42.
+   - Остальная логика — как в v2025-09-06-44.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-06-44 ready');
+      console.info('POLISOL widget v2025-09-06-45-tenant ready');
 
-      const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
+      /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
-      const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote';
+      const QUOTE_ENDPOINT = API_BASE + '/api/polisol/quote'; */
+
+      // стало
+      const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
+      const API_BASE = (window.POLISOL_API_BASE || 'https://ecwid-polisol-cost-wholesale.vercel.app').replace(/\/$/, '');
+      const PRICING_ENDPOINT = `${API_BASE}/api/polisol/pricing?tenant=${TENANT}`;
+      const QUOTE_ENDPOINT = `${API_BASE}/api/polisol/quote?tenant=${TENANT}`;
+
+
       const FAMILY_PREFIX = 'ПОЛІСОЛ-';
 
       // Заголовок описания

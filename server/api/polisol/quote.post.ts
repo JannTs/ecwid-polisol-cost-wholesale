@@ -1,6 +1,10 @@
 // server/api/polisol/quote.post.ts
-// v44 — техтовар из вариации мастер-товара + customSlug + загрузка картинки вариации
-//     + присвоение категории PV (NUXT_PV_CATEGORY_ID) при создании/обновлении
+// v45-tenant — на базе вашей текущей версии:
+//   + поддержка двух тенантов (test/prod) через utils/tenant
+//   + мягкое присвоение категории PV (NUXT_PV_CATEGORY_ID__*)
+//   + customSlug для SEO (ПОЛІСОЛ-<суф>-<idx>-ОПТОМ)
+//   + подтягивание картинки из вариации мастер-товара по базовому SKU (ПОЛІСОЛ-<суф>)
+//   + идемпотентность по SKU (как и было)
 import { defineEventHandler, readBody, setResponseHeader, createError } from 'h3';
 import { EcwidClient } from '~~/utils/ecwid';
 import {
@@ -10,10 +14,11 @@ import {
   isKvas,
   SUFFIX_BY_CONTENT,
 } from '~~/utils/polisol';
+import { getTenantCtx } from '~~/utils/tenant';
 
 const FAMILY_PREFIX = 'ПОЛІСОЛ-';
 
-// ASCII-ключи для CLI/интеграций без кириллицы (опционально)
+// ASCII-ключи для CLI/интеграций без кириллицы (опционно)
 const KEY_TO_CANON: Record<string, string> = {
   classic: 'Класичний',
   mans: 'Чоловіча Сила',
@@ -27,19 +32,25 @@ const KEY_TO_CANON: Record<string, string> = {
 
 function buildProductName(humanLabel: string, batchCount: number, kvas: boolean): string {
   if (kvas) return `${humanLabel} (ціна в партії ${batchCount})`;
+  // гарантируем пробел между ™ и «»
   const quoted = humanLabel.match(/[«»]/) ? humanLabel : `«${humanLabel}»`;
   return `ПОЛІСОЛ™ ${quoted} (ціна в партії ${batchCount})`;
 }
 
-/** ---- Ecwid REST helpers (локально, без зависимостей проекта) ---- */
-async function ecwidFetch(path: string, qs: Record<string, any> = {}, opts: RequestInit = {}) {
-  const { NUXT_ECWID_STORE_ID, NUXT_ECWID_TOKEN } = useRuntimeConfig();
-  const u = new URL(`https://app.ecwid.com/api/v3/${NUXT_ECWID_STORE_ID}${path}`);
+/** --------- Ecwid REST helpers (per-tenant) --------- */
+type TenantCtx = { storeId: string; token: string };
+async function ecwidFetch(
+  ctx: TenantCtx,
+  path: string,
+  qs: Record<string, any> = {},
+  opts: RequestInit = {}
+) {
+  const u = new URL(`https://app.ecwid.com/api/v3/${ctx.storeId}${path}`);
   Object.entries(qs).forEach(([k, v]) => u.searchParams.set(k, String(v)));
   const res = await fetch(u.toString(), {
     ...opts,
     headers: {
-      Authorization: `Bearer ${NUXT_ECWID_TOKEN}`,
+      Authorization: `Bearer ${ctx.token}`,
       'Content-Type': 'application/json',
       ...(opts.headers || {}),
     },
@@ -58,16 +69,16 @@ async function ecwidFetch(path: string, qs: Record<string, any> = {}, opts: Requ
 }
 
 // Найти мастер-товар по базовому SKU вариации (например, "ПОЛІСОЛ-Ш")
-async function findMasterByBaseSku(baseSku: string) {
-  // Ecwid ищет по точному SKU (включая SKU вариаций)
-  const j = await ecwidFetch('/products', { sku: baseSku });
+async function findMasterByBaseSku(ctx: TenantCtx, baseSku: string) {
+  // Ecwid ищет по ТOЧНОМУ SKU (включая SKU вариаций)
+  const j = await ecwidFetch(ctx, '/products', { sku: baseSku });
   const items = Array.isArray(j?.items) ? j.items : [];
   return items[0] || null;
 }
 
 // Прочитать товар полностью (нужны combinations с imageUrl/…)
-async function getProductFull(productId: number) {
-  return await ecwidFetch(`/products/${productId}`);
+async function getProductFull(ctx: TenantCtx, productId: number) {
+  return await ecwidFetch(ctx, `/products/${productId}`);
 }
 
 // Вытянуть URL исходной картинки вариации по её базовому SKU
@@ -85,9 +96,13 @@ function pickVariationOriginalUrl(product: any, baseSku: string): string | null 
 }
 
 // Загрузить основную картинку для созданного товара по внешней ссылке
-async function uploadMainImageByExternalUrl(productId: number, externalUrl: string) {
+async function uploadMainImageByExternalUrl(
+  ctx: TenantCtx,
+  productId: number,
+  externalUrl: string
+) {
   // Ecwid сам создаёт все размеры на базе одного файла
-  await ecwidFetch(`/products/${productId}/image`, { externalUrl }, { method: 'POST' });
+  await ecwidFetch(ctx, `/products/${productId}/image`, { externalUrl }, { method: 'POST' });
 }
 
 // Человекочитаемый slug (можно заменить на транслитерацию)
@@ -97,41 +112,25 @@ function buildCustomSlug(suffix: string, idx: number, _kvas: boolean) {
   return `${FAMILY_PREFIX}${suffix}-${idx}-${tail}`;
 }
 
-// Утилита выбора валидной категорийки (PV приоритетно)
-const toNum = (v: any) => {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-};
-
+/** --------------------- Handler --------------------- */
 export default defineEventHandler(async (event) => {
-  // CORS (при необходимости)
+  // CORS
   setResponseHeader(event, 'Access-Control-Allow-Origin', '*');
   setResponseHeader(event, 'Access-Control-Allow-Headers', 'Content-Type, Authorization');
   setResponseHeader(event, 'Access-Control-Allow-Methods', 'POST, OPTIONS');
 
-  const {
-    NUXT_ECWID_STORE_ID,
-    NUXT_ECWID_TOKEN,
-    NUXT_PV_CATEGORY_ID, // ← добавлено в v44
-    NUXT_ECWID_WHOLESALE_CATEGORY_ID,
-    NUXT_ECWID_TECH_CATEGORY_ID,
-    NUXT_ECWID_CATEGORY_ID,
-  } = useRuntimeConfig();
-
-  // Итоговый ID категории для техтоваров: PV > TECH > WHOLESALE > DEFAULT
-  const pvCategoryId =
-    toNum(NUXT_PV_CATEGORY_ID) ??
-    toNum(NUXT_ECWID_TECH_CATEGORY_ID) ??
-    toNum(NUXT_ECWID_WHOLESALE_CATEGORY_ID) ??
-    toNum(NUXT_ECWID_CATEGORY_ID);
+  // Контекст выбранного тенанта
+  const ctxAll = getTenantCtx(event);
+  const ctx: TenantCtx = { storeId: ctxAll.storeId, token: ctxAll.token };
+  const pvCategoryId = ctxAll.pvCategoryId;
 
   const body = await readBody<{
     contentLabel?: string;
-    contentKey?: string;
+    contentKey?: string; // ASCII-alias
     batchIndex?: number; // 1..5
   }>(event);
 
-  // Нормализация входа
+  // Выбираем label либо по contentKey
   let humanLabel = (body?.contentLabel || '').trim();
   if (!humanLabel && body?.contentKey) {
     const key = String(body.contentKey).trim().toLowerCase();
@@ -170,16 +169,17 @@ export default defineEventHandler(async (event) => {
   const sku = `${FAMILY_PREFIX}${suffix}-${idx}`;
   const name = buildProductName(humanLabel, batchCount, isKvas(canon));
 
-  const client = new EcwidClient(String(NUXT_ECWID_STORE_ID), String(NUXT_ECWID_TOKEN));
+  // Ecwid client для выбранного тенанта
+  const client = new EcwidClient(ctxAll.storeId, ctxAll.token);
 
   // Подготовим данные вариации мастер-товара (для картинки)
   const baseVariationSku = `${FAMILY_PREFIX}${suffix}`; // без -idx
   let variationImageUrl: string | null = null;
 
   try {
-    const master = await findMasterByBaseSku(baseVariationSku);
+    const master = await findMasterByBaseSku(ctx, baseVariationSku);
     if (master?.id) {
-      const full = await getProductFull(master.id);
+      const full = await getProductFull(ctx, master.id);
       variationImageUrl = pickVariationOriginalUrl(full, baseVariationSku);
     }
   } catch (e) {
@@ -194,12 +194,12 @@ export default defineEventHandler(async (event) => {
       if (existing.name !== name) patch.name = name;
       if (Number(existing.price) !== Number(price)) patch.price = price;
 
-      // v44: мягко ДОБАВЛЯЕМ PV-категорию, не затирая остальные
+      // v45: мягко ДОБАВЛЯЕМ PV-категорию, не затирая остальные
       if (pvCategoryId) {
         const existingIds = Array.isArray(existing.categoryIds)
           ? existing.categoryIds
               .map((x: any) => Number(x))
-              .filter((n: number) => Number.isFinite(n))
+              .filter((n: number) => Number.isFinite(n) && n > 0)
           : [];
         if (!existingIds.includes(pvCategoryId)) {
           patch.categoryIds = Array.from(new Set([...existingIds, pvCategoryId]));
@@ -210,10 +210,11 @@ export default defineEventHandler(async (event) => {
       if (!existing.customSlug) {
         patch.customSlug = buildCustomSlug(suffix, idx, isKvas(canon));
       }
+
       if (Object.keys(patch).length) await client.updateProduct(existing.id, patch);
 
       if (!existing?.imageUrl && variationImageUrl) {
-        await uploadMainImageByExternalUrl(existing.id, variationImageUrl);
+        await uploadMainImageByExternalUrl(ctx, existing.id, variationImageUrl);
       }
 
       return { ok: true, productId: existing.id, unitPrice: price, batchIndex: idx, batchCount };
@@ -237,7 +238,7 @@ export default defineEventHandler(async (event) => {
     const created = await client.createProduct(payload);
 
     if (variationImageUrl) {
-      await uploadMainImageByExternalUrl(created.id, variationImageUrl);
+      await uploadMainImageByExternalUrl(ctx, created.id, variationImageUrl);
     }
 
     return { ok: true, productId: created.id, unitPrice: price, batchIndex: idx, batchCount };
