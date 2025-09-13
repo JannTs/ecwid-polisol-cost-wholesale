@@ -1,12 +1,12 @@
-/* POLISOL widget v2025-09-13-54-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-54-tenant)
+/* POLISOL widget v2025-09-13-55-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-55-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-13-54-tenant.
+   - Остальная логика — как в v2025-09-13-55-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-12-52-tenant ready');
+      console.info('POLISOL widget v2025-09-12-55-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -841,7 +841,7 @@
                   });
             });
       });
-      /* === POLISOL: lock agree checkbox on CART (prod only, minimal) === */
+      /* === POLISOL: lock agree checkbox on CART (prod, minimal + DOM hooks) === */
       (function () {
             const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
             if (TENANT !== 'prod') return;
@@ -849,9 +849,9 @@
             const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
             const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
 
-            function updateAgreeOnce() {
+            function computeAndApply() {
                   const cb = document.getElementById('form-control__checkbox--agree');
-                  if (!cb) return; // нет чекбокса — ничего не делаем
+                  if (!cb || !window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
 
                   Ecwid.Cart.get(cart => {
                         const items = cart?.items || [];
@@ -876,31 +876,46 @@
                   });
             }
 
-            // Экспорт для ручного запуска из консоли: __polisolAgreeTest()
-            window.__polisolAgreeTest = updateAgreeOnce;
+            // дебаунс для частых ререндеров Ecwid на CART
+            let timer = 0;
+            function schedule() { clearTimeout(timer); timer = setTimeout(computeAndApply, 120); }
 
-            // Инициализация: первый прогон и простые хуки Ecwid
+            // экспорт для ручного прогона
+            window.__polisolAgreeTest = computeAndApply;
+
             function init() {
-                  updateAgreeOnce();
-                  try { Ecwid.OnCartChanged.add(updateAgreeOnce); } catch { }
-                  try { Ecwid.OnPageSwitch.add(page => { if (page?.type === 'CART') updateAgreeOnce(); }); } catch { }
-                  try { Ecwid.OnPageLoaded.add(page => { if (page?.type === 'CART') updateAgreeOnce(); }); } catch { }
+                  // первый прогон
+                  schedule();
+
+                  // Ecwid хуки (могут не стрелять при локальных изменениях qty — поэтому ниже ещё DOM-хуки)
+                  try { Ecwid.OnCartChanged.add(schedule); } catch { }
+                  try { Ecwid.OnPageSwitch.add(p => { if (p?.type === 'CART') schedule(); }); } catch { }
+                  try { Ecwid.OnPageLoaded.add(p => { if (p?.type === 'CART') schedule(); }); } catch { }
+
+                  // DOM-хуки: слушаем ввод/изменение в области корзины + ререндеры (без attributes!)
+                  const root = document.querySelector('.ec-cart') || document.body;
+                  root.addEventListener('input', schedule, true);
+                  root.addEventListener('change', schedule, true);
+
+                  const mo = new MutationObserver(schedule);
+                  mo.observe(root, { childList: true, subtree: true });
             }
 
-            // Ждём появления Ecwid или чекбокса и стартуем
-            const start = () => init();
-            if (document.readyState === 'loading') {
-                  document.addEventListener('DOMContentLoaded', start, { once: true });
-            } else {
-                  start();
+            // ждём появления чекбокса и API корзины
+            function ready() {
+                  return !!document.getElementById('form-control__checkbox--agree')
+                        && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get);
             }
+            (function boot(t0 = Date.now()) {
+                  if (ready()) return init();
+                  if (Date.now() - t0 > 12000) return; // 12s TTL
+                  setTimeout(() => boot(t0), 120);
+            })();
 
-            // Небольшой страховочный таймер на случай, если хуки не сработали
-            setTimeout(updateAgreeOnce, 400);
-            setTimeout(updateAgreeOnce, 1200);
-            setTimeout(updateAgreeOnce, 2500);
+            // страховочные прогоны на случай тихих изменений
+            setTimeout(schedule, 400);
+            setTimeout(schedule, 1200);
+            setTimeout(schedule, 2500);
       })();
-
-
 
 })();
