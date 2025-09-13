@@ -872,7 +872,7 @@
 
                         cb.disabled = !valid;
                         if (!valid) cb.checked = false;
-                        // console.debug('[POLISOL agree]', { total, batch, mixed, hasPol, valid }, 'disabled=', cb.disabled);
+                        console.debug('[POLISOL agree]', { total, batch, mixed, hasPol, valid }, 'disabled=', cb.disabled);
                   });
             }
 
