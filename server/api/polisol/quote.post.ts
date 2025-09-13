@@ -1,6 +1,5 @@
-// server/api/polisol/quote.post.ts - v48
-// server/api/polisol/quote.post.ts
-// v48-tenant — customSlug кирилицею: "полісол-{вміст}-{N}-банок" (нижній регістр)
+// server/api/polisol/quote.post.ts - v57
+// v57-tenant — customSlug кирилицею: "полісол-{вміст}-{N}-банок" (нижній регістр)
 // + як і раніше: multi-tenant (test/prod), PV-категорія, картинка з варіації, ідемпотентність по SKU
 import { defineEventHandler, readBody, setResponseHeader, createError } from 'h3';
 import { EcwidClient } from '~~/utils/ecwid';
@@ -206,6 +205,7 @@ export default defineEventHandler(async (event) => {
       const patch: any = {};
       if (existing.name !== name) patch.name = name;
       if (Number(existing.price) !== Number(price)) patch.price = price;
+      if (Number(existing.weight) !== 0.8) patch.weight = 0.8;
 
       // Додаємо PV-категорію м'яко
       if (ctxAll.pvCategoryId) {
@@ -247,6 +247,7 @@ export default defineEventHandler(async (event) => {
         { name: 'Партія', value: String(batchCount) },
         { name: 'Вміст', value: humanLabel },
       ],
+      weight: 0.8,
     };
     if (ctxAll.pvCategoryId) payload.categoryIds = [ctxAll.pvCategoryId];
 
