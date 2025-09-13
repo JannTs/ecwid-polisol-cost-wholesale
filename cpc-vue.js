@@ -1,12 +1,12 @@
-/* POLISOL widget v2025-09-12-51-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-12-51-tenant)
+/* POLISOL widget v2025-09-12-52-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-12-52-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-12-51-tenant.
+   - Остальная логика — как в v2025-09-12-52-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-12-51-tenant ready');
+      console.info('POLISOL widget v2025-09-12-52-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -841,10 +841,18 @@
                   });
             });
       });
-      /* === CART agree-lock (robust, prod only) === */
+      /* === POLISOL CART agree-lock (robust) === */
       (function () {
+            // 1) Экспорт тест-функции ВСЕГДА, без условий
+            (function exposeStub() {
+                  if (typeof window.__polisolAgreeTest !== 'function') {
+                        window.__polisolAgreeTest = function () { /* заменится при инициализации */ };
+                  }
+            })();
+
             const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
-            if (TENANT !== 'prod') return;
+            // На test обычно нет .ec-cart__agreement — просто выходим мягко
+            const isProd = TENANT === 'prod';
 
             const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
             const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
@@ -867,62 +875,48 @@
             }
 
             function apply() {
-                  const cb = document.getElementById('form-control__checkbox--agree');
-                  if (!cb) return; // элемента нет — выходим
+                  const agree = document.getElementById('form-control__checkbox--agree');
+                  if (!agree) return;
+                  if (!isProd) { agree.disabled = false; return; } // на test не блокируем
+                  if (!window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
+
                   Ecwid.Cart.get(function (cart) {
                         const st = computeState(cart);
-                        if (!st.hasPol) { cb.disabled = false; return; }
-                        cb.disabled = !st.valid;
-                        if (!st.valid) cb.checked = false;
-                        // включи для дебага при необходимости:
-                        // console.debug('[POLISOL agree]', st, 'disabled=', cb.disabled);
+                        if (!st.hasPol) { agree.disabled = false; return; }
+                        agree.disabled = !st.valid;
+                        if (!st.valid) agree.checked = false;
                   });
             }
 
-            // Экспорт однократного теста в консоль
+            // 2) Подменяем тест-функцию на реальную
             window.__polisolAgreeTest = apply;
 
-            // Ждём загрузки Ecwid и появления чекбокса
-            function waitFor(cond, next, ttlMs = 8000, step = 120) {
-                  const t0 = Date.now();
-                  (function tick() {
-                        if (cond()) return next();
-                        if (Date.now() - t0 > ttlMs) return;
-                        setTimeout(tick, step);
-                  })();
-            }
-
+            // 3) Инициализация — ждём и Ecwid, и сам чекбокс
+            function waitFor(cond, next, ttl = 12000, step = 120) { const t0 = Date.now(); (function loop() { if (cond()) return next(); if (Date.now() - t0 > ttl) return; setTimeout(loop, step); })(); }
             function init() {
-                  // начальный прогон
                   apply();
-
-                  // подписки (делаем один раз)
-                  if (!init._bound) {
-                        init._bound = true;
-                        try { Ecwid.OnCartChanged.add(apply); } catch { }
-                        try { Ecwid.OnPageSwitch.add(apply); } catch { }
+                  if (init._bound) return; init._bound = true;
+                  try { Ecwid.OnCartChanged.add(apply); } catch { }
+                  try { Ecwid.OnPageSwitch.add(apply); } catch { }
+                  try {
                         const root = document.querySelector('.ec-cart') || document.body;
-                        try {
-                              const mo = new MutationObserver(apply);
-                              mo.observe(root, { childList: true, subtree: true, attributes: true });
-                              init._mo = mo;
-                        } catch { }
-                  }
+                        const mo = new MutationObserver(apply);
+                        mo.observe(root, { childList: true, subtree: true, attributes: true });
+                        init._mo = mo;
+                  } catch { }
             }
 
-            // стартуем, когда доступен Ecwid и чекбокс в DOM
             waitFor(
-                  () => !!window.Ecwid && !!document.getElementById('form-control__checkbox--agree'),
+                  () => !!document.getElementById('form-control__checkbox--agree') && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get),
                   init
             );
-
-            // и на всякий пожарный — ещё одна попытка после полной загрузки
             document.addEventListener('DOMContentLoaded', () => {
                   waitFor(
-                        () => !!window.Ecwid && !!document.getElementById('form-control__checkbox--agree'),
+                        () => !!document.getElementById('form-control__checkbox--agree') && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get),
                         init
                   );
             });
       })();
+
 
 })();
