@@ -1,9 +1,9 @@
-/* POLISOL widget v2025-09-12-52-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-12-52-tenant)
+/* POLISOL widget v2025-09-13-53-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-53-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-12-52-tenant.
+   - Остальная логика — как в v2025-09-13-53-tenant.
 */
 (() => {
       console.info('POLISOL widget v2025-09-12-52-tenant ready');
@@ -841,18 +841,10 @@
                   });
             });
       });
-      /* === POLISOL CART agree-lock (robust) === */
+      /* === POLISOL CART agree-lock (fixed, debounced, no attribute loop) === */
       (function () {
-            // 1) Экспорт тест-функции ВСЕГДА, без условий
-            (function exposeStub() {
-                  if (typeof window.__polisolAgreeTest !== 'function') {
-                        window.__polisolAgreeTest = function () { /* заменится при инициализации */ };
-                  }
-            })();
-
             const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
-            // На test обычно нет .ec-cart__agreement — просто выходим мягко
-            const isProd = TENANT === 'prod';
+            if (TENANT !== 'prod') return; // на test не трогаем
 
             const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
             const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
@@ -874,49 +866,75 @@
                   return { hasPol, mixed, total, batch, valid };
             }
 
+            let applying = false;
             function apply() {
-                  const agree = document.getElementById('form-control__checkbox--agree');
-                  if (!agree) return;
-                  if (!isProd) { agree.disabled = false; return; } // на test не блокируем
-                  if (!window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
-
+                  const cb = document.getElementById('form-control__checkbox--agree');
+                  if (!cb || !window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
+                  if (applying) return;
+                  applying = true;
                   Ecwid.Cart.get(function (cart) {
-                        const st = computeState(cart);
-                        if (!st.hasPol) { agree.disabled = false; return; }
-                        agree.disabled = !st.valid;
-                        if (!st.valid) agree.checked = false;
+                        try {
+                              const st = computeState(cart);
+                              if (!st.hasPol) {
+                                    cb.disabled = false;
+                              } else {
+                                    cb.disabled = !st.valid;
+                                    if (!st.valid) cb.checked = false;
+                              }
+                        } finally {
+                              applying = false;
+                        }
                   });
             }
 
-            // 2) Подменяем тест-функцию на реальную
+            // Экспорт для ручного прогона из консоли
             window.__polisolAgreeTest = apply;
 
-            // 3) Инициализация — ждём и Ecwid, и сам чекбокс
-            function waitFor(cond, next, ttl = 12000, step = 120) { const t0 = Date.now(); (function loop() { if (cond()) return next(); if (Date.now() - t0 > ttl) return; setTimeout(loop, step); })(); }
+            // Дебаунс для событий и мутаций
+            let scheduled = false;
+            function schedule() {
+                  if (scheduled) return;
+                  scheduled = true;
+                  setTimeout(() => { scheduled = false; apply(); }, 120);
+            }
+
             function init() {
-                  apply();
-                  if (init._bound) return; init._bound = true;
-                  try { Ecwid.OnCartChanged.add(apply); } catch { }
-                  try { Ecwid.OnPageSwitch.add(apply); } catch { }
+                  schedule();
+                  if (init._bound) return;
+                  init._bound = true;
+
+                  try { Ecwid.OnCartChanged.add(schedule); } catch { }
+                  try { Ecwid.OnPageSwitch.add(schedule); } catch { }
+
+                  // ВАЖНО: наблюдаем ТОЛЬКО дочерние изменения, без attributes, чтобы не зациклиться
                   try {
                         const root = document.querySelector('.ec-cart') || document.body;
-                        const mo = new MutationObserver(apply);
-                        mo.observe(root, { childList: true, subtree: true, attributes: true });
+                        const mo = new MutationObserver(schedule);
+                        mo.observe(root, { childList: true, subtree: true });
                         init._mo = mo;
                   } catch { }
             }
 
-            waitFor(
-                  () => !!document.getElementById('form-control__checkbox--agree') && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get),
-                  init
-            );
-            document.addEventListener('DOMContentLoaded', () => {
-                  waitFor(
-                        () => !!document.getElementById('form-control__checkbox--agree') && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get),
-                        init
-                  );
-            });
+            function waitFor(cond, next, ttl = 12000, step = 120) {
+                  const t0 = Date.now();
+                  (function loop() {
+                        if (cond()) return next();
+                        if (Date.now() - t0 > ttl) return;
+                        setTimeout(loop, step);
+                  })();
+            }
+
+            const readyCond = () =>
+                  !!document.getElementById('form-control__checkbox--agree') &&
+                  !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get);
+
+            if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', () => waitFor(readyCond, init));
+            } else {
+                  waitFor(readyCond, init);
+            }
       })();
+
 
 
 })();
