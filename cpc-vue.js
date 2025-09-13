@@ -1,9 +1,9 @@
-/* POLISOL widget v2025-09-13-53-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-53-tenant)
+/* POLISOL widget v2025-09-13-54-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-54-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
-   - Остальная логика — как в v2025-09-13-53-tenant.
+   - Остальная логика — как в v2025-09-13-54-tenant.
 */
 (() => {
       console.info('POLISOL widget v2025-09-12-52-tenant ready');
@@ -841,98 +841,64 @@
                   });
             });
       });
-      /* === POLISOL CART agree-lock (fixed, debounced, no attribute loop) === */
+      /* === POLISOL: lock agree checkbox on CART (prod only, minimal) === */
       (function () {
             const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
-            if (TENANT !== 'prod') return; // на test не трогаем
+            if (TENANT !== 'prod') return;
 
             const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
             const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
 
-            function computeState(cart) {
-                  const items = Array.isArray(cart?.items) ? cart.items : [];
-                  let total = 0, idx = null, mixed = false, hasPol = false;
-                  for (const it of items) {
-                        const sku = (it?.product?.sku || it?.sku || '').trim();
-                        const m = sku.match(skuRe);
-                        if (!m) continue;
-                        hasPol = true;
-                        const i = parseInt(m[1], 10);
-                        if (idx == null) idx = i; else if (idx !== i) mixed = true;
-                        total += Number(it.quantity || 0);
-                  }
-                  const batch = idx ? IDX2COUNT[idx] : null;
-                  const valid = hasPol ? (!mixed && batch != null && total === batch) : true;
-                  return { hasPol, mixed, total, batch, valid };
-            }
-
-            let applying = false;
-            function apply() {
+            function updateAgreeOnce() {
                   const cb = document.getElementById('form-control__checkbox--agree');
-                  if (!cb || !window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
-                  if (applying) return;
-                  applying = true;
-                  Ecwid.Cart.get(function (cart) {
-                        try {
-                              const st = computeState(cart);
-                              if (!st.hasPol) {
-                                    cb.disabled = false;
-                              } else {
-                                    cb.disabled = !st.valid;
-                                    if (!st.valid) cb.checked = false;
-                              }
-                        } finally {
-                              applying = false;
+                  if (!cb) return; // нет чекбокса — ничего не делаем
+
+                  Ecwid.Cart.get(cart => {
+                        const items = cart?.items || [];
+                        let total = 0, idx = null, mixed = false, hasPol = false;
+
+                        for (const it of items) {
+                              const sku = (it.product?.sku || it.sku || '').trim();
+                              const m = sku.match(skuRe);
+                              if (!m) continue;
+                              hasPol = true;
+                              const i = parseInt(m[1], 10);
+                              if (idx == null) idx = i; else if (idx !== i) mixed = true;
+                              total += Number(it.quantity || 0);
                         }
+
+                        const batch = idx ? IDX2COUNT[idx] : null;
+                        const valid = hasPol ? (!mixed && batch != null && total === batch) : true;
+
+                        cb.disabled = !valid;
+                        if (!valid) cb.checked = false;
+                        // console.debug('[POLISOL agree]', { total, batch, mixed, hasPol, valid }, 'disabled=', cb.disabled);
                   });
             }
 
-            // Экспорт для ручного прогона из консоли
-            window.__polisolAgreeTest = apply;
+            // Экспорт для ручного запуска из консоли: __polisolAgreeTest()
+            window.__polisolAgreeTest = updateAgreeOnce;
 
-            // Дебаунс для событий и мутаций
-            let scheduled = false;
-            function schedule() {
-                  if (scheduled) return;
-                  scheduled = true;
-                  setTimeout(() => { scheduled = false; apply(); }, 120);
-            }
-
+            // Инициализация: первый прогон и простые хуки Ecwid
             function init() {
-                  schedule();
-                  if (init._bound) return;
-                  init._bound = true;
-
-                  try { Ecwid.OnCartChanged.add(schedule); } catch { }
-                  try { Ecwid.OnPageSwitch.add(schedule); } catch { }
-
-                  // ВАЖНО: наблюдаем ТОЛЬКО дочерние изменения, без attributes, чтобы не зациклиться
-                  try {
-                        const root = document.querySelector('.ec-cart') || document.body;
-                        const mo = new MutationObserver(schedule);
-                        mo.observe(root, { childList: true, subtree: true });
-                        init._mo = mo;
-                  } catch { }
+                  updateAgreeOnce();
+                  try { Ecwid.OnCartChanged.add(updateAgreeOnce); } catch { }
+                  try { Ecwid.OnPageSwitch.add(page => { if (page?.type === 'CART') updateAgreeOnce(); }); } catch { }
+                  try { Ecwid.OnPageLoaded.add(page => { if (page?.type === 'CART') updateAgreeOnce(); }); } catch { }
             }
 
-            function waitFor(cond, next, ttl = 12000, step = 120) {
-                  const t0 = Date.now();
-                  (function loop() {
-                        if (cond()) return next();
-                        if (Date.now() - t0 > ttl) return;
-                        setTimeout(loop, step);
-                  })();
-            }
-
-            const readyCond = () =>
-                  !!document.getElementById('form-control__checkbox--agree') &&
-                  !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get);
-
+            // Ждём появления Ecwid или чекбокса и стартуем
+            const start = () => init();
             if (document.readyState === 'loading') {
-                  document.addEventListener('DOMContentLoaded', () => waitFor(readyCond, init));
+                  document.addEventListener('DOMContentLoaded', start, { once: true });
             } else {
-                  waitFor(readyCond, init);
+                  start();
             }
+
+            // Небольшой страховочный таймер на случай, если хуки не сработали
+            setTimeout(updateAgreeOnce, 400);
+            setTimeout(updateAgreeOnce, 1200);
+            setTimeout(updateAgreeOnce, 2500);
       })();
 
 
