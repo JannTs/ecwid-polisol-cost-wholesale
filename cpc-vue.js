@@ -1,5 +1,5 @@
 /* POLISOL widget v2025-09-13-57-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-57-tenant)
+/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-13-57-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
