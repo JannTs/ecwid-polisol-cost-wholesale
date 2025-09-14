@@ -1,13 +1,13 @@
-/* POLISOL widget v2025-09-14-60-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-14-60-tenant)
+/* POLISOL widget v2025-09-13-57-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-57-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
    - рядом с чекбоксом показана подсказка «залишилось N із M»; когда N=0 — текст меняется на «Партія M сформована»
-   - Остальная логика — как в v2025-09-14-60-tenant.
+   - Остальная логика — как в v2025-09-13-57-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-14-60-tenant ready');
+      console.info('POLISOL widget v2025-09-13-57-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -842,145 +842,6 @@
                   });
             });
       });
-      /* === POLISOL: lock agree checkbox on CART (prod, minimal + DOM hooks + hint) === */
-      (function () {
-            const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
-            if (TENANT !== 'prod') return;
-
-            const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
-            const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
-
-            function ensureHintNode() {
-                  const label = document.querySelector('label[for="form-control__checkbox--agree"]');
-                  if (!label) return null;
-                  let hint = document.getElementById('polisol-agree-hint');
-                  if (!hint) {
-                        hint = document.createElement('span');
-                        hint.id = 'polisol-agree-hint';
-                        hint.style.marginLeft = '8px';
-                        hint.style.fontSize = '12px';
-                        hint.style.opacity = '0.85';
-                        label.insertAdjacentElement('afterend', hint);
-                  }
-                  return hint;
-            }
-
-            function computeAndApply() {
-                  const cb = document.getElementById('form-control__checkbox--agree');
-                  if (!cb || !window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
-
-                  Ecwid.Cart.get(cart => {
-                        const items = cart?.items || [];
-                        let total = 0, idx = null, mixed = false, hasPol = false;
-
-                        for (const it of items) {
-                              const sku = (it.product?.sku || it.sku || '').trim();
-                              const m = sku.match(skuRe);
-                              if (!m) continue;
-                              hasPol = true;
-                              const i = parseInt(m[1], 10);
-                              if (idx == null) idx = i; else if (idx !== i) mixed = true;
-                              total += Number(it.quantity || 0);
-                        }
-
-                        const batch = idx ? IDX2COUNT[idx] : null;
-                        const valid = hasPol ? (!mixed && batch != null && total === batch) : true;
-
-                        // (де)активация чекбокса
-                        cb.disabled = !valid;
-                        if (!valid) cb.checked = false;
-
-                        // подсказка рядом с чекбоксом
-                        const hint = ensureHintNode();
-                        if (!hint) return;
-
-                        if (!hasPol || !batch || mixed) {
-                              // нет POLISOL / разные партии — подсказку скрываем
-                              hint.textContent = '';
-                              hint.style.display = 'none';
-                        } else {
-                              const left = Math.max(0, batch - total);
-                              hint.style.display = '';
-                              hint.textContent = left === 0
-                                    ? `Партія ${batch} сформована.`
-                                    : `залишилось ${left} із ${batch}`;
-                        }
-
-                        // console.debug('[POLISOL agree]', { total, batch, mixed, hasPol, valid }, 'disabled=', cb.disabled);
-                  });
-            }
-
-            // дебаунс для частых ререндеров Ecwid на CART
-            let timer = 0;
-            function schedule() { clearTimeout(timer); timer = setTimeout(computeAndApply, 120); }
-
-            // экспорт для ручного прогона
-            window.__polisolAgreeTest = computeAndApply;
-
-            function init() {
-                  schedule();
-
-                  // Ecwid хуки
-                  try { Ecwid.OnCartChanged.add(schedule); } catch { }
-                  try { Ecwid.OnPageSwitch.add(p => { if (p?.type === 'CART') schedule(); }); } catch { }
-                  try { Ecwid.OnPageLoaded.add(p => { if (p?.type === 'CART') schedule(); }); } catch { }
-
-                  // DOM-хуки: input/change + мутации (без наблюдения атрибутов)
-                  const root = document.querySelector('.ec-cart') || document.body;
-                  root.addEventListener('input', schedule, true);
-                  root.addEventListener('change', schedule, true);
-                  new MutationObserver(schedule).observe(root, { childList: true, subtree: true });
-            }
-
-            function ready() {
-                  return !!document.getElementById('form-control__checkbox--agree')
-                        && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get);
-            }
-            (function boot(t0 = Date.now()) {
-                  if (ready()) return init();
-                  if (Date.now() - t0 > 12000) return;
-                  setTimeout(() => boot(t0), 120);
-            })();
-
-            // страховочные прогоны
-            setTimeout(schedule, 400);
-            setTimeout(schedule, 1200);
-            setTimeout(schedule, 2500);
-      })();
-      /* === POLISOL PV-guard: KILL SWITCH (restore native Ecwid UI on tech pages) === */
-      (function () {
-            // 1) Глобальный флаг — на случай, если старый код его читает
-            window.POLISOL_PV_GUARD_OFF = true;
-
-            // 2) Нейтрализуем старые функции, если они были объявлены
-            try { if (typeof window.mountPvGuard === 'function') window.mountPvGuard = function () { }; } catch { }
-            try { if (typeof window.unmountPvGuard === 'function') window.unmountPvGuard = function () { }; } catch { }
-
-            // 3) Универсальная “прочистка”: удалить наш guard и показать панель
-            function restorePurchasePanel() {
-                  // только на PRODUCT-страницах
-                  try { const p = Ecwid.getLastPage(); if (!p || p.type !== 'PRODUCT') return; } catch { }
-
-                  // убрать нашу ссылку/заглушку, если она осталась
-                  const guard = document.getElementById('polisol-pv-guard');
-                  if (guard && guard.parentNode) guard.parentNode.removeChild(guard);
-
-                  // показать штатную панель покупки
-                  const panel = document.querySelector('.product-details-module.product-details__action-panel.details-product-purchase');
-                  if (panel) panel.style.display = '';
-            }
-
-            // 4) Хуки, чтобы состояние всегда было “как в теме”
-            document.addEventListener('DOMContentLoaded', restorePurchasePanel);
-            if (window.Ecwid && Ecwid.OnPageLoaded) Ecwid.OnPageLoaded.add(restorePurchasePanel);
-            if (window.Ecwid && Ecwid.OnPageSwitch) Ecwid.OnPageSwitch.add(restorePurchasePanel);
-
-            // 5) На случай, если тема внезапно перерисует DOM — мягкий троттлинг
-            let t = 0;
-            const thr = () => { clearTimeout(t); t = setTimeout(restorePurchasePanel, 150); };
-            const root = document.body;
-            try { new MutationObserver(thr).observe(root, { childList: true, subtree: true }); } catch { }
-      })();
 
 
 })();
