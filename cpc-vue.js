@@ -1,13 +1,13 @@
-/* POLISOL widget v2025-09-14-58-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-14-58-tenant)
+/* POLISOL widget v2025-09-13-57-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-57-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
    - рядом с чекбоксом показана подсказка «залишилось N із M»; когда N=0 — текст меняется на «Партія M сформована»
-   - Остальная логика — как в v2025-09-14-58-tenant.
+   - Остальная логика — как в v2025-09-13-57-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-14-58-tenant ready');
+      console.info('POLISOL widget v2025-09-12-57-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -947,109 +947,6 @@
             setTimeout(schedule, 1200);
             setTimeout(schedule, 2500);
       })();
-      /* === POLISOL PV-guard 2.0: toggle purchase panel by cart emptiness + auto-redirect after add === */
-      (function () {
-            const SKU_RE = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-[1-5]$/i;
 
-            function readSkuFromDom() {
-                  const el = document.querySelector('[itemprop="sku"]')
-                        || document.querySelector('.product-details__sku')
-                        || document.querySelector('.ecwid-productBrowser-sku');
-                  return (el?.getAttribute?.('content') || el?.textContent || '').trim().replace(/^Артикул\s*/i, '');
-            }
 
-            function lastPage() {
-                  try { return Ecwid.getLastPage(); } catch { return {}; }
-            }
-
-            function isTechProductPage() {
-                  const p = lastPage();
-                  if (p?.type !== 'PRODUCT') return false;
-                  const sku = readSkuFromDom();
-                  const isTech = SKU_RE.test(sku);
-                  const isMaster = Number(p.productId) === Number(window.POLISOL_MASTER_PRODUCT_ID || 0);
-                  return isTech && !isMaster;
-            }
-
-            function getNodes() {
-                  const panel = document.querySelector('.product-details-module.product-details__action-panel.details-product-purchase');
-                  const guard = document.getElementById('polisol-pv-guard');
-                  return { panel, guard };
-            }
-
-            function setDisplay(el, on) { if (!el) return; el.style.display = on ? '' : 'none'; }
-
-            function toggleByCartState() {
-                  if (!isTechProductPage()) return;
-                  const { panel, guard } = getNodes();
-                  if (!panel) return; // нет панели — нечего делать
-                  Ecwid.Cart.get(cart => {
-                        const items = Array.isArray(cart?.items) ? cart.items : [];
-                        const empty = items.length === 0;
-                        // корзина пуста → показываем панель покупки, скрываем guard-ссылку
-                        setDisplay(panel, empty);
-                        setDisplay(guard, !empty);
-                  });
-            }
-
-            // Автопереход на мастер после успешного добавления
-            let addHooked = false, addPending = false, baseline = 0;
-            function countCartQty(cb) {
-                  Ecwid.Cart.get(c => {
-                        const qty = (c?.items || []).reduce((s, it) => s + Number(it.quantity || 0), 0);
-                        cb(qty);
-                  });
-            }
-            function bindAddAndRedirect() {
-                  if (!isTechProductPage()) return;
-                  const { panel } = getNodes();
-                  if (!panel || addHooked) return;
-                  const btn = panel.querySelector('button[type="button"], .form-control__button');
-                  if (!btn) return;
-                  addHooked = true;
-                  btn.addEventListener('click', () => {
-                        if (addPending) return;
-                        addPending = true;
-                        countCartQty(q => {
-                              baseline = q;
-                              const t0 = Date.now();
-                              (function poll() {
-                                    countCartQty(q2 => {
-                                          if (q2 > baseline) {
-                                                const mid = Number(window.POLISOL_MASTER_PRODUCT_ID || 0);
-                                                if (mid) location.hash = `#!/p/${mid}`;
-                                                addPending = false;
-                                          } else if (Date.now() - t0 < 10000) {
-                                                setTimeout(poll, 200);
-                                          } else {
-                                                addPending = false; // timeout — ничего не делаем
-                                          }
-                                    });
-                              })();
-                        });
-                  }, { once: false });
-            }
-
-            function initIfTech() {
-                  if (!isTechProductPage()) return;
-                  toggleByCartState();
-                  bindAddAndRedirect();
-            }
-
-            // Хуки Ecwid SPA
-            if (window.Ecwid && Ecwid.OnPageLoaded) Ecwid.OnPageLoaded.add(initIfTech);
-            if (window.Ecwid && Ecwid.OnPageSwitch) Ecwid.OnPageSwitch.add(initIfTech);
-
-            // Прямой заход
-            document.addEventListener('DOMContentLoaded', () => initIfTech());
-
-            // На случай локальных изменений корзины — слегка троттлим
-            let lastRun = 0, pend = false;
-            function scheduleToggle() {
-                  const now = Date.now();
-                  if (now - lastRun > 800) { lastRun = now; toggleByCartState(); }
-                  else if (!pend) { pend = true; setTimeout(() => { pend = false; lastRun = Date.now(); toggleByCartState(); }, 820); }
-            }
-            try { Ecwid.OnCartChanged.add(scheduleToggle); } catch { }
-      })();
 })();
