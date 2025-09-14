@@ -7,7 +7,7 @@
    - Остальная логика — как в v2025-09-13-57-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-13-57-tenant ready');
+      console.info('POLISOL  widget v2025-09-13-57-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
