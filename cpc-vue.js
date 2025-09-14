@@ -1,13 +1,13 @@
-/* POLISOL widget v2025-09-13-57-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-13-57-tenant)
+/* POLISOL widget v2025-09-14-59-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC VUE WIDGET (v2025-09-14-59-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
    - рядом с чекбоксом показана подсказка «залишилось N із M»; когда N=0 — текст меняется на «Партія M сформована»
-   - Остальная логика — как в v2025-09-13-57-tenant.
+   - Остальная логика — как в v2025-09-14-59-tenant.
 */
 (() => {
-      console.info('POLISOL widget v2025-09-12-57-tenant ready');
+      console.info('POLISOL widget v2025-09-14-59-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -946,6 +946,76 @@
             setTimeout(schedule, 400);
             setTimeout(schedule, 1200);
             setTimeout(schedule, 2500);
+      })();
+      /* === POLISOL PV-guard lite: показывать панель покупки, если корзина пуста; иначе — ссылку === */
+      (function () {
+            const SKU_TECH_RE = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-[1-5]$/i;
+
+            function getLastPageSafe() { try { return Ecwid.getLastPage(); } catch { return {}; } }
+            function readSkuFromDom() {
+                  const el = document.querySelector('[itemprop="sku"]')
+                        || document.querySelector('.product-details__sku')
+                        || document.querySelector('.ecwid-productBrowser-sku');
+                  return (el?.getAttribute?.('content') || el?.textContent || '').trim().replace(/^Артикул\s*/i, '');
+            }
+            function isTechProductPage() {
+                  const p = getLastPageSafe();
+                  if (p?.type !== 'PRODUCT') return false;
+                  const sku = readSkuFromDom();
+                  if (!SKU_TECH_RE.test(sku)) return false;
+                  const isMaster = Number(p.productId) === Number(window.POLISOL_MASTER_PRODUCT_ID || 0);
+                  return !isMaster;
+            }
+
+            function getPurchasePanel() {
+                  return document.querySelector('.product-details-module.product-details__action-panel.details-product-purchase');
+            }
+            function show(el) { if (el) el.style.display = ''; }
+            function hide(el) { if (el) el.style.display = 'none'; }
+
+            function toggleByCartEmpty() {
+                  if (!isTechProductPage()) return;
+                  const panel = getPurchasePanel();
+                  const guard = document.getElementById('polisol-pv-guard');
+                  if (!panel) return;
+
+                  Ecwid.Cart.get(cart => {
+                        const empty = !(cart && Array.isArray(cart.items) && cart.items.length > 0);
+                        if (empty) {
+                              // корзина пуста → показать штатную панель, скрыть ссылку
+                              show(panel); if (guard) hide(guard);
+                        } else {
+                              // корзина не пуста → скрыть панель, показать ссылку
+                              hide(panel); if (guard) show(guard);
+                        }
+                  });
+            }
+
+            function unmountPvGuardLite() {
+                  // аккуратно вернуть панель и спрятать ссылку при уходе со страницы
+                  const panel = getPurchasePanel();
+                  const guard = document.getElementById('polisol-pv-guard');
+                  show(panel);
+                  if (guard) hide(guard);
+            }
+
+            function initOrReset() {
+                  if (isTechProductPage()) {
+                        toggleByCartEmpty();
+                        // подписки (лёгкие)
+                        if (!initOrReset._bound) {
+                              initOrReset._bound = true;
+                              try { Ecwid.OnCartChanged.add(toggleByCartEmpty); } catch { }
+                        }
+                  } else {
+                        unmountPvGuardLite();
+                  }
+            }
+
+            // Хуки Ecwid SPA + старт
+            try { Ecwid.OnPageLoaded.add(initOrReset); } catch { }
+            try { Ecwid.OnPageSwitch.add(initOrReset); } catch { }
+            document.addEventListener('DOMContentLoaded', initOrReset);
       })();
 
 
