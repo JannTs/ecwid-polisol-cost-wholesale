@@ -1,13 +1,13 @@
-/* POLISOL widget v2025-09-13-57-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-13-57-tenant)
+/* POLISOL widget v2025-09-14-61-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-14-61-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
    - рядом с чекбоксом показана подсказка «залишилось N із M»; когда N=0 — текст меняется на «Партія M сформована»
-   - Остальная логика — как в v2025-09-13-57-tenant.
+   - Остальная логика — как в v2025-09-14-61-tenant.
 */
 (() => {
-      console.info('POLISOL  widget v2025-09-13-57-tenant ready');
+      console.info('POLISOL  widget v2025-09-14-61-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -844,4 +844,83 @@
       });
 
 
+})();
+
+/* === POLISOL: CART agree-lock (prod, throttled, minimal) v61 === */
+(function () {
+      // Вкл. на любом тенанте для отладки: в консоли window.POLISOL_LOCK_ON_ALL = 1
+      const FORCE_ALL = !!window.POLISOL_LOCK_ON_ALL;
+      const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
+      if (!FORCE_ALL && TENANT !== 'prod') return;
+
+      const IDX2COUNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
+      const skuRe = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
+
+      function computeState(cart) {
+            const items = Array.isArray(cart?.items) ? cart.items : [];
+            let total = 0, idx = null, mixed = false, hasPol = false;
+            for (const it of items) {
+                  const sku = (it.product?.sku || it.sku || '').trim();
+                  const m = sku.match(skuRe);
+                  if (!m) continue;
+                  hasPol = true;
+                  const i = parseInt(m[1], 10);
+                  if (idx == null) idx = i; else if (idx !== i) mixed = true;
+                  total += Number(it.quantity || 0);
+            }
+            const batch = idx ? IDX2COUNT[idx] : null;
+            const valid = hasPol ? (!mixed && batch != null && total === batch) : true;
+            return { hasPol, valid };
+      }
+
+      function applyOnce() {
+            const cb = document.getElementById('form-control__checkbox--agree');
+            if (!cb || !window.Ecwid || !Ecwid.Cart || !Ecwid.Cart.get) return;
+            Ecwid.Cart.get(cart => {
+                  const st = computeState(cart);
+                  cb.disabled = st.hasPol ? !st.valid : false;
+                  if (!st.valid) cb.checked = false;
+                  // Если у тебя есть подсказка рядом — она останется (код подсказки не трогаем)
+            });
+      }
+
+      // Экспорт для ручного прогона: __polisolAgreeTest()
+      window.__polisolAgreeTest = applyOnce;
+
+      // Троттлинг вызовов applyOnce()
+      const MIN_INTERVAL = 900;
+      let last = 0, pend = false;
+      function schedule() {
+            const now = Date.now(), diff = now - last;
+            if (diff >= MIN_INTERVAL) { last = now; applyOnce(); }
+            else if (!pend) {
+                  pend = true;
+                  setTimeout(() => { pend = false; last = Date.now(); applyOnce(); }, MIN_INTERVAL - diff + 30);
+            }
+      }
+
+      function init() {
+            schedule();
+            try { Ecwid.OnCartChanged.add(schedule); } catch { }
+            try { Ecwid.OnPageSwitch.add(p => { if (p?.type === 'CART') schedule(); }); } catch { }
+            try { Ecwid.OnPageLoaded.add(p => { if (p?.type === 'CART') schedule(); }); } catch { }
+
+            const root = document.querySelector('.ec-cart') || document.body;
+            root.addEventListener('input', schedule, true);
+            root.addEventListener('change', schedule, true);
+            new MutationObserver(schedule).observe(root, { childList: true, subtree: true });
+
+            // страховочные редкие вызовы
+            setTimeout(schedule, 500);
+            setTimeout(schedule, 1500);
+            setTimeout(schedule, 3500);
+      }
+
+      (function boot(t0 = Date.now()) {
+            const ready = !!document.getElementById('form-control__checkbox--agree')
+                  && !!(window.Ecwid && Ecwid.Cart && Ecwid.Cart.get);
+            if (ready) return init();
+            if (Date.now() - t0 > 15000) return;
+            setTimeout(() => boot(t0), 120);
+      })();
 })();
