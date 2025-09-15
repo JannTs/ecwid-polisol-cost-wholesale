@@ -1,13 +1,13 @@
-/* POLISOL widget v2025-09-14-63-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-14-63-tenant)
+/* POLISOL widget v2025-09-15-64-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-15-64-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
    - рядом с чекбоксом показана подсказка «залишилось N із M»; когда N=0 — текст меняется на «Партія M сформована»
-   - Остальная логика — как в v2025-09-14-63-tenant.
+   - Остальная логика — как в v2025-09-15-64-tenant.
 */
 (() => {
-      console.info('POLISOL  widget v2025-14-63-tenant ready');
+      console.info('POLISOL  widget v2025-15-64-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -846,7 +846,7 @@
 
 })();
 
-/* === POLISOL: CART agree-lock + sidebar hint & link control (no page-type deps) v63 === */
+/* === POLISOL: CART agree-lock + sidebar hint & link (event-driven, no polling) v64 === */
 (function () {
       const TENANT = (window.POLISOL_TENANT || 'prod').toLowerCase();
       const FORCE_ALL = !!window.POLISOL_LOCK_ON_ALL;
@@ -947,36 +947,48 @@
             });
       }
 
-      // экспорт для ручного прогона
+      // Экспорт для ручного прогона
       window.__polisolCartSidebarHintTest = applyOnce;
       window.__polisolAgreeTest = window.__polisolAgreeTest || applyOnce;
 
-      // троттлинг Ecwid.Cart.get
-      const MIN_INTERVAL = 900;
-      let last = 0, pend = false;
-      function schedule() {
-            const now = Date.now(), diff = now - last;
-            if (diff >= MIN_INTERVAL) { last = now; applyOnce(); }
-            else if (!pend) {
-                  pend = true;
-                  setTimeout(() => { pend = false; last = Date.now(); applyOnce(); }, MIN_INTERVAL - diff + 30);
+      // ------ Event-driven запуск: НЕТ периодического опроса ------
+      let need = false;
+      const MIN_INTERVAL = 800;
+      let last = 0, running = false;
+
+      function markDirty() {
+            need = true;
+            const now = Date.now();
+            if (running) return;
+            if (now - last < MIN_INTERVAL) return; // троттлинг
+            running = true;
+            last = now;
+            need = false;
+            try { applyOnce(); } finally {
+                  running = false;
             }
       }
 
       function init() {
-            schedule();
-            try { Ecwid.OnCartChanged.add(schedule); } catch { }
-            try { Ecwid.OnPageLoaded.add(schedule); } catch { }
-            try { Ecwid.OnPageSwitch.add(schedule); } catch { }
+            // первый прогон (без петли)
+            markDirty();
 
+            // события Ecwid
+            try { Ecwid.OnCartChanged.add(markDirty); } catch { }
+            try { Ecwid.OnPageLoaded.add(markDirty); } catch { }
+            try { Ecwid.OnPageSwitch.add(markDirty); } catch { }
+
+            // узкие DOM-хуки только в области корзины
             const side = document.querySelector('.ec-cart__sidebar-inner') || document.body;
-            side.addEventListener('input', schedule, true);
-            side.addEventListener('change', schedule, true);
-            new MutationObserver(schedule).observe(side, { childList: true, subtree: true });
+            side.addEventListener('input', markDirty, true);
+            side.addEventListener('change', markDirty, true);
 
-            setTimeout(schedule, 500);
-            setTimeout(schedule, 1500);
-            setTimeout(schedule, 3500);
+            const products = document.querySelector('.ec-cart__products-inner')
+                  || document.querySelector('.ec-cart__products')
+                  || side;
+            try {
+                  new MutationObserver(markDirty).observe(products, { childList: true, subtree: true });
+            } catch { }
       }
 
       (function boot(t0 = Date.now()) {
@@ -988,4 +1000,3 @@
             setTimeout(() => boot(t0), 120);
       })();
 })();
-
