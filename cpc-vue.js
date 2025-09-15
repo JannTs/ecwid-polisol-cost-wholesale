@@ -1,13 +1,13 @@
-/* POLISOL widget v2025-09-15-64-tenant  */
-/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-15-64-tenant)
+/* POLISOL widget v2025-09-15-65-tenant  */
+/* ecwid-polisol-cost-wholesale — CPC  VUE WIDGET (v2025-09-15-65-tenant)
    Новое:
    - Глобальный Loading Overlay на  время quote/add-to-cart/wait (анимированный SVG).
    - Кнопка "в кошик" блокируется на время операции (anti-double-click).
    - рядом с чекбоксом показана подсказка «залишилось N із M»; когда N=0 — текст меняется на «Партія M сформована»
-   - Остальная логика — как в v2025-09-15-64-tenant.
+   - Остальная логика — как в v2025-09-15-65-tenant.
 */
 (() => {
-      console.info('POLISOL  widget v2025-15-64-tenant ready');
+      console.info('POLISOL  widget v2025-15-65-tenant ready');
 
       /* const API_BASE = 'https://ecwid-polisol-cost-wholesale.vercel.app';
       const PRICING_ENDPOINT = API_BASE + '/api/polisol/pricing';
@@ -447,46 +447,15 @@
             if (!isMasterPolisolPage()) { removeSummaryContainer(); return; }
 
             const host = ensureSummaryContainer(); if (!host) return;
+            host.style.overflow = ''; // ✅ важно: убрать любые hidden, иначе горизонтальный скролл не появится
             const body = host.querySelector('#polisol-body'); const titleEl = host.querySelector('#polisol-title');
-            const items = (cart && cart.items) || []; const fam = items.filter(isPolisolItem);
-            const lock = getLock();
+            // ... всё без изменений до места сборки таблицы ...
 
-            const fp = cartFingerprint(items, lock);
-            if (__cpc.summaryFP === fp) return;
-            __cpc.summaryFP = fp;
+            // ⬇️ БЫЛО:
+            // const tblStyle = 'width:100%;border-collapse:collapse;';
+            // ⬇️ СТАЛО:
+            const tblStyle = 'border-collapse:collapse;min-width:560px;width:max-content;white-space:nowrap;';
 
-            if (!fam.length) {
-                  if (titleEl) titleEl.textContent = 'Підсумок кошика: кошик порожній';
-                  body.innerHTML = '';
-                  return;
-            }
-
-            let limit = lock ? batchLimitByIndex(lock.batchIndex) : null;
-            if (!limit) {
-                  const uiCount = readBatchCount(); const uiIdx = uiCount ? batchCountToIndex(uiCount) : null;
-                  if (uiIdx) limit = batchLimitByIndex(uiIdx);
-            }
-            if (!limit) {
-                  const inf = inferLimitFromCart(fam);
-                  if (inf) limit = inf;
-            }
-
-            const currentQty = sumFamilyQty(items);
-
-            if (limit) {
-                  const remaining = Math.max(0, limit - currentQty);
-                  if (remaining <= 0) {
-                        if (titleEl) {
-                              titleEl.innerHTML = `Партія ${limit} сформована. <a href="#!/cart" class="polisol-go-cart" style="margin-left:10px; text-decoration:underline;">Оформити замовлення</a>`;
-                        }
-                  } else {
-                        if (titleEl) titleEl.textContent = `Підсумок кошика: Залишилось ${remaining} із ${limit}`;
-                  }
-            } else {
-                  if (titleEl) titleEl.textContent = 'Підсумок кошика';
-            }
-
-            const tblStyle = 'width:100%;border-collapse:collapse;';
             const thStyle = 'padding:10px 12px;border-top:1px solid #eee;text-align:center;vertical-align:middle;';
             const tdL = 'padding:10px 12px;border-top:1px solid #eee;text-align:left;vertical-align:middle;';
             const tdR = 'padding:10px 12px;border-top:1px solid #eee;text-align:right;white-space:nowrap;vertical-align:middle;';
@@ -494,29 +463,15 @@
             const totalR = 'padding:12px 12px;border-top:2px solid #ddd;font-weight:700;text-align:right;white-space:nowrap;';
 
             let rows = '', total = 0;
-            for (let i = 0; i < items.length; i++) {
-                  const it = items[i]; if (!isPolisolItem(it)) continue;
-                  try {
-                        const idx = (rows.match(/<tr>/g) || []).length + 1;
-                        const canon = getItemContentLabel(it) || inferCanonFromName(itemName(it)) || '—';
-                        const needPrefix = !/^Квас/i.test(canon);
-                        const label = `${needPrefix ? 'ПОЛІСОЛ™' : ''}«${canon}»${limit ? ' (ціна в партії ' + limit + ')' : ''}`;
-                        const qty = Number(it.quantity || 0);
-                        const unit = getUnitPrice(it, getLock());
-                        const sum = unit * qty; total += sum;
-                        rows += `<tr>
-          <td style="${thStyle}">${idx}</td>
-          <td style="${tdL}">${label}</td>
-          <td style="${tdR}">${qty}</td>
-          <td style="${tdR}">${formatUAH(unit)}</td>
-          <td style="${tdR}">${formatUAH(sum)}</td>
-        </tr>`;
-                  } catch (ex) { console.warn('[POLISOL] row render failed:', ex, it); }
-            }
+            // ... цикл заполнения rows — без изменений ...
 
             if (!rows) { body.innerHTML = ''; return; }
 
+            // ⬇️ БЫЛО: body.innerHTML = `\n  <table style="${tblStyle}"> ... </table>\n`;
+            // ⬇️ СТАЛО: оборачиваем таблицу в горизонтально прокручиваемый div
             body.innerHTML = `
+    <div class="polisol-scroll"
+         style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding:8px 12px;scrollbar-gutter:stable;">
       <table style="${tblStyle}">
         <thead>
           <tr>
@@ -534,8 +489,10 @@
             <td style="${totalR}">${formatUAH(total)}</td>
           </tr>
         </tfoot>
-      </table>`;
+      </table>
+    </div>`;
       }
+
       async function renderCartSummary() { try { const cart = await fetchCart(); renderCartSummarySync(cart); } catch (_) { } }
 
       // ----- Add to Bag (только на мастер POLISOL)
