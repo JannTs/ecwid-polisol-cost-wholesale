@@ -1001,70 +1001,68 @@
       })();
 })();
 
-/* === POLISOL: enable horizontal scroll for summary table (safe addon) v65 === */
+/* === POLISOL: enable horizontal scroll for summary table (resilient observer) v66 === */
 (function () {
-      function wrapSummaryTableOnce() {
+      function wrapOnce() {
             const host = document.getElementById('polisol-cart-summary');
-            if (!host) return;
-            // важно: не блокировать горизонтальный скролл
-            host.style.overflow = '';
+            if (!host) return false;
+            host.style.overflow = ''; // не мешаем горизонтальному скроллу
 
             const body = host.querySelector('#polisol-body');
-            if (!body) return;
+            if (!body) return false;
 
-            // найдём первую таблицу сводки
             const table = body.querySelector('table');
-            if (!table) return;
+            if (!table) return false;
 
-            // уже обёрнуто?
+            // уже обёрнуто
             if (table.parentElement && table.parentElement.classList.contains('polisol-scroll')) {
-                  // гарантируем полезные стили на самой таблице
+                  // гарантируем стили таблицы
                   table.style.borderCollapse = 'collapse';
                   table.style.minWidth = '560px';
                   table.style.whiteSpace = 'nowrap';
                   table.style.width = 'max-content';
-                  return;
+                  return true;
             }
 
             // создаём обёртку со скроллом
             const wrap = document.createElement('div');
             wrap.className = 'polisol-scroll';
-            wrap.style.overflowX = 'auto';
-            wrap.style.webkitOverflowScrolling = 'touch';
-            wrap.style.padding = '8px 12px';
-            try { wrap.style.scrollbarGutter = 'stable'; } catch (_) { }
+            wrap.style.cssText = 'overflow-x:auto;-webkit-overflow-scrolling:touch;padding:8px 12px;scrollbar-gutter:stable;';
 
-            // таблице — минимальную ширину и nowrap
             table.style.borderCollapse = 'collapse';
             table.style.minWidth = '560px';
             table.style.whiteSpace = 'nowrap';
             table.style.width = 'max-content';
 
-            // вставляем
             table.parentNode.insertBefore(wrap, table);
             wrap.appendChild(table);
+            return true;
       }
 
-      // мягко «подмешаемся» в renderCartSummarySync, если он есть
+      // экспорт для ручного прогона из консоли
+      window.__polisolWrapSummary = wrapOnce;
+
+      // троттлинг, чтобы не дёргать wrap на каждой мутации
+      let t = 0;
+      function schedule() { if (t) return; t = setTimeout(() => { t = 0; wrapOnce(); }, 50); }
+
+      // стартовые пуски
+      if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', schedule, { once: true });
+      } else {
+            schedule();
+      }
+      try { Ecwid.OnPageLoaded.add(schedule); } catch { }
+      try { Ecwid.OnPageSwitch.add(schedule); } catch { }
+      try { Ecwid.OnCartChanged.add(schedule); } catch { }
+
+      // наблюдаем весь body: как только сводка появится/перерисуется — обернём
       try {
-            const _orig = window.renderCartSummarySync || (typeof renderCartSummarySync === 'function' ? renderCartSummarySync : null);
-            if (_orig) {
-                  const patched = function (...args) {
-                        try { _orig.apply(this, args); } finally { wrapSummaryTableOnce(); }
-                  };
-                  // сохраняем ссылку глобально, если была
-                  if (window.renderCartSummarySync) window.renderCartSummarySync = patched;
-                  else if (typeof renderCartSummarySync === 'function') renderCartSummarySync = patched;
-            }
-      } catch (_) { }
+            new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+      } catch { }
 
-      // ивенты Ecwid SPA / перерисовки
-      function scheduleWrap() {
-            // небольшой defer, чтобы дождаться вставки DOM сводки
-            setTimeout(wrapSummaryTableOnce, 0);
-      }
-      document.addEventListener('DOMContentLoaded', scheduleWrap);
-      try { Ecwid.OnPageLoaded.add(scheduleWrap); } catch { }
-      try { Ecwid.OnPageSwitch.add(scheduleWrap); } catch { }
-      try { Ecwid.OnCartChanged.add(scheduleWrap); } catch { }
+      // несколько «страховочных» прогона на случай тихих перестроек
+      setTimeout(schedule, 300);
+      setTimeout(schedule, 1200);
+      setTimeout(schedule, 2500);
 })();
