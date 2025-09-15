@@ -1000,3 +1000,71 @@
             setTimeout(() => boot(t0), 120);
       })();
 })();
+
+/* === POLISOL: enable horizontal scroll for summary table (safe addon) v65 === */
+(function () {
+      function wrapSummaryTableOnce() {
+            const host = document.getElementById('polisol-cart-summary');
+            if (!host) return;
+            // важно: не блокировать горизонтальный скролл
+            host.style.overflow = '';
+
+            const body = host.querySelector('#polisol-body');
+            if (!body) return;
+
+            // найдём первую таблицу сводки
+            const table = body.querySelector('table');
+            if (!table) return;
+
+            // уже обёрнуто?
+            if (table.parentElement && table.parentElement.classList.contains('polisol-scroll')) {
+                  // гарантируем полезные стили на самой таблице
+                  table.style.borderCollapse = 'collapse';
+                  table.style.minWidth = '560px';
+                  table.style.whiteSpace = 'nowrap';
+                  table.style.width = 'max-content';
+                  return;
+            }
+
+            // создаём обёртку со скроллом
+            const wrap = document.createElement('div');
+            wrap.className = 'polisol-scroll';
+            wrap.style.overflowX = 'auto';
+            wrap.style.webkitOverflowScrolling = 'touch';
+            wrap.style.padding = '8px 12px';
+            try { wrap.style.scrollbarGutter = 'stable'; } catch (_) { }
+
+            // таблице — минимальную ширину и nowrap
+            table.style.borderCollapse = 'collapse';
+            table.style.minWidth = '560px';
+            table.style.whiteSpace = 'nowrap';
+            table.style.width = 'max-content';
+
+            // вставляем
+            table.parentNode.insertBefore(wrap, table);
+            wrap.appendChild(table);
+      }
+
+      // мягко «подмешаемся» в renderCartSummarySync, если он есть
+      try {
+            const _orig = window.renderCartSummarySync || (typeof renderCartSummarySync === 'function' ? renderCartSummarySync : null);
+            if (_orig) {
+                  const patched = function (...args) {
+                        try { _orig.apply(this, args); } finally { wrapSummaryTableOnce(); }
+                  };
+                  // сохраняем ссылку глобально, если была
+                  if (window.renderCartSummarySync) window.renderCartSummarySync = patched;
+                  else if (typeof renderCartSummarySync === 'function') renderCartSummarySync = patched;
+            }
+      } catch (_) { }
+
+      // ивенты Ecwid SPA / перерисовки
+      function scheduleWrap() {
+            // небольшой defer, чтобы дождаться вставки DOM сводки
+            setTimeout(wrapSummaryTableOnce, 0);
+      }
+      document.addEventListener('DOMContentLoaded', scheduleWrap);
+      try { Ecwid.OnPageLoaded.add(scheduleWrap); } catch { }
+      try { Ecwid.OnPageSwitch.add(scheduleWrap); } catch { }
+      try { Ecwid.OnCartChanged.add(scheduleWrap); } catch { }
+})();
