@@ -1066,3 +1066,115 @@
       setTimeout(schedule, 1200);
       setTimeout(schedule, 2500);
 })();
+
+/* === POLISOL: batch alert + selector sync (master page) v67 === */
+(function () {
+      const SKU_RE = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
+      const IDX2CNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
+
+      function isMasterPolisol() {
+            try {
+                  const p = Ecwid.getLastPage?.();
+                  return p && p.type === 'PRODUCT' && Number(p.productId) === Number(window.POLISOL_MASTER_PRODUCT_ID || 0);
+            } catch { return false; }
+      }
+
+      // Глобальный (чтобы можно было вызывать из твоего кода при add-to-bag)
+      window.POLISOL_showMixAlert = function (count) {
+            const x = (count != null) ? `(${count} од.)` : '';
+            alert(`У кошику вже є товар з фіксованою партією ${x}. Щоб змінити розмір партії, спочатку видаліть існуючі позиції для партії ${count ?? 'X'} у кошику.`);
+      };
+
+      // Вычисляем «заблоковану» партію в кошику: idx 1..5 и count 15..75 (если единственная і несмешана)
+      function getCartPolisolBatch(cb) {
+            Ecwid.Cart.get(cart => {
+                  const items = cart?.items || [];
+                  let idx = null, mixed = false, has = false;
+                  for (const it of items) {
+                        const sku = (it.product?.sku || it.sku || '').trim();
+                        const m = sku.match(SKU_RE);
+                        if (!m) continue;
+                        has = true;
+                        const i = +m[1];
+                        if (idx == null) idx = i; else if (idx !== i) mixed = true;
+                  }
+                  if (has && !mixed && idx != null) cb({ idx, count: IDX2CNT[idx] });
+                  else cb(null);
+            });
+      }
+
+      // Твои утилиты (если есть) — используем, но с фоллбэком
+      function findBatchControlSafe() {
+            try { if (typeof findBatchControl === 'function') return findBatchControl(); } catch { }
+            // запасной селектор: контейнер опций на карточке
+            return document.querySelector('.product-details__product-options')
+                  || document.querySelector('.product-details-module__option')
+                  || null;
+      }
+      function readBatchCountSafe() {
+            try { if (typeof readBatchCount === 'function') return readBatchCount(); } catch { }
+            // запасной парсер: пытаемся вытащить 15/30/45/60/75 из текстовки селекта
+            const fc = findBatchControlSafe(); if (!fc) return null;
+            const txt = (fc.querySelector('.form-control__select-text')?.textContent || fc.textContent || '').trim();
+            const m = txt.match(/\b(15|30|45|60|75)\b/);
+            return m ? +m[1] : null;
+      }
+
+      function setSelectorVisualToCount(count) {
+            const fc = findBatchControlSafe(); if (!fc) return;
+            fc.dataset.lockedBatchCount = String(count); // помечаем lock
+            const txtNode = fc.querySelector('.form-control__select-text');
+            if (txtNode) {
+                  // Видимый текст — любой, лишь бы содержал число (readBatchCount его поймёт)
+                  txtNode.textContent = `Партія ${count}`;
+            }
+      }
+
+      // Следим, чтобы селект не уходил в «невизначений» как только в кошику есть POLISOL
+      function syncSelectorFromCart() {
+            if (!isMasterPolisol()) return;
+            getCartPolisolBatch(info => {
+                  const fc = findBatchControlSafe(); if (!fc) return;
+                  if (info) {
+                        // корзина уже «зафіксувала» партію → отразим её в селекте
+                        setSelectorVisualToCount(info.count);
+                  } else {
+                        // POLISOL нет → снимаем lock, оставляем как есть (вкл. «Виберіть…»)
+                        delete fc.dataset.lockedBatchCount;
+                  }
+            });
+      }
+
+      // Блокируем попытку сменить партію при зафиксованной корзиной
+      function guardSelectorChange() {
+            if (!isMasterPolisol()) return;
+            const fc = findBatchControlSafe(); if (!fc) return;
+            const locked = fc.dataset.lockedBatchCount ? parseInt(fc.dataset.lockedBatchCount, 10) : null;
+            if (!locked) return;
+
+            const chosen = readBatchCountSafe(); // что пытаются выбрать в UI
+            if (chosen && chosen !== locked) {
+                  // откат селекта и новый алерт
+                  setSelectorVisualToCount(locked);
+                  window.POLISOL_showMixAlert(locked);
+            }
+      }
+
+      // Привязки
+      function bindOnce() {
+            if (bindOnce._done) return; bindOnce._done = true;
+            const root = document.querySelector('.product-details') || document;
+            // ловим локальные изменения селекта
+            root.addEventListener('change', () => setTimeout(guardSelectorChange, 0), true);
+            root.addEventListener('input', () => setTimeout(guardSelectorChange, 0), true);
+            root.addEventListener('click', () => setTimeout(guardSelectorChange, 120), true);
+      }
+
+      function init() { syncSelectorFromCart(); bindOnce(); }
+
+      document.addEventListener('DOMContentLoaded', init);
+      try { Ecwid.OnPageLoaded.add(init); } catch { }
+      try { Ecwid.OnPageSwitch.add(init); } catch { }
+      try { Ecwid.OnCartChanged.add(syncSelectorFromCart); } catch { }
+})();
+
