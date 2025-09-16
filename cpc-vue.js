@@ -579,7 +579,7 @@
                         return;
                   }
                   if (lock) {
-                        if (String(lock.batchIndex) !== String(idx)) { const lim = batchLimitByIndex(lock.batchIndex); alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.'); return; }
+                        if (String(lock.batchIndex) !== String(idx)) { const lim = batchLimitByIndex(lock.batchIndex); alert('У кошику зафіксована інша партія на ' + lim + ' шт. Продовжуйте комплектувати асортимент лише для партії на ' + lim + ' або очистіть кошик та перейдіть до іншої партії.'); return; }
                   } else { setLock({ batchIndex: idx }); lockSetThisClick = true; lock = getLock(); }
 
                   const limit = batchLimitByIndex(lock.batchIndex);
