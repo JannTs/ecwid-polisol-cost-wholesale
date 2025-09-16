@@ -572,7 +572,12 @@
                   const hasFam = cartHasFamily(beforeCart.items);
                   let lock = getLock();
 
-                  if (hasFam && !lock) { alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); return; }
+                  if (hasFam && !lock) {
+                        //alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.'); 
+                        (window.POLISOL_showMixAlert || function (c) { alert('Партія зафіксована. Видаліть позиції для зміни.'); })(batchLimitByIndex(locked.batchIndex));
+
+                        return;
+                  }
                   if (lock) {
                         if (String(lock.batchIndex) !== String(idx)) { const lim = batchLimitByIndex(lock.batchIndex); alert('У кошику зафіксована інша партія на ' + lim + ' шт. Очистьте кошик або оформіть замовлення.'); return; }
                   } else { setLock({ batchIndex: idx }); lockSetThisClick = true; lock = getLock(); }
@@ -749,7 +754,9 @@
 
                   switch (res.status) {
                         case 'mix':
-                              alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.');
+                              //alert('У кошику вже є POLISOL з попередніх дій. Оформіть/очистьте його перед зміною партії.');
+                              (window.POLISOL_showMixAlert || function (c) { alert('Партія зафіксована. Видаліть позиції для зміни.'); })(batchLimitByIndex(locked.batchIndex));
+
                               break;
                         case 'over':
                               alert(`У кошику ${res.total} шт., що перевищує ліміт партії ${res.batch} шт. Приберіть зайві товари.`);
