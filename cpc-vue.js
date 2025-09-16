@@ -1184,4 +1184,103 @@
       try { Ecwid.OnPageSwitch.add(init); } catch { }
       try { Ecwid.OnCartChanged.add(syncSelectorFromCart); } catch { }
 })();
+/* === POLISOL: force-sync batch selector from cart on master (wait for DOM) v68 === */
+(function () {
+      const SKU_RE = /^ПОЛІСОЛ-[А-Яа-яЁёІіЇїЄєҐґ]{1,2}-([1-5])$/i;
+      const IDX2CNT = { 1: 15, 2: 30, 3: 45, 4: 60, 5: 75 };
+
+      function isMaster() {
+            try { const p = Ecwid.getLastPage?.(); return p && p.type === 'PRODUCT' && Number(p.productId) === Number(window.POLISOL_MASTER_PRODUCT_ID || 0); }
+            catch { return false; }
+      }
+
+      function findBatchControl() {
+            return document.querySelector('.product-details__product-options')
+                  || document.querySelector('.product-details-module__option')
+                  || document.querySelector('.details-product-options')
+                  || null;
+      }
+
+      function setSelectorVisualToCount(count) {
+            const fc = findBatchControl(); if (!fc) return false;
+            fc.dataset.lockedBatchCount = String(count);
+            // Ecwid-видимый текст
+            const txt = fc.querySelector('.form-control__select-text');
+            if (txt) txt.textContent = `Партія ${count}`;
+            // Если вдруг есть настоящий <select> — попробуем выбрать опцию и дёрнуть событие
+            const sel = fc.querySelector('select, .form-control__select');
+            if (sel && 'value' in sel) {
+                  // ищем опцию с числом
+                  const want = String(count);
+                  const opts = sel.querySelectorAll('option');
+                  for (const o of opts) {
+                        if ((o.value && o.value.includes(want)) || (o.textContent || '').includes(want)) {
+                              sel.value = o.value || want;
+                              try { sel.dispatchEvent(new Event('change', { bubbles: true })); } catch { }
+                              try { sel.dispatchEvent(new Event('input', { bubbles: true })); } catch { }
+                              break;
+                        }
+                  }
+            }
+            return true;
+      }
+
+      function getCartBatch(cb) {
+            if (!window.Ecwid || !Ecwid.Cart?.get) return cb(null);
+            Ecwid.Cart.get(cart => {
+                  const items = cart?.items || [];
+                  let idx = null, mixed = false, has = false;
+                  for (const it of items) {
+                        const sku = (it.product?.sku || it.sku || '').trim();
+                        const m = sku.match(SKU_RE);
+                        if (!m) continue;
+                        has = true;
+                        const i = +m[1];
+                        if (idx == null) idx = i; else if (idx !== i) mixed = true;
+                  }
+                  if (has && !mixed && idx != null) cb({ idx, count: IDX2CNT[idx] }); else cb(null);
+            });
+      }
+
+      function waitFor(cond, then, ttl = 12000, step = 120) {
+            const t0 = Date.now();
+            (function loop() {
+                  if (cond()) return then();
+                  if (Date.now() - t0 > ttl) return;
+                  setTimeout(loop, step);
+            })();
+      }
+
+      function syncOnce() {
+            if (!isMaster()) return;
+            getCartBatch(info => {
+                  if (!info) return; // корзина пуста или смешана — ничего не навязываем
+                  const doSync = () => setSelectorVisualToCount(info.count);
+                  // если блока опций ещё нет — подождём его появления
+                  if (!findBatchControl()) waitFor(() => !!findBatchControl(), doSync, 8000, 120);
+                  else doSync();
+            });
+      }
+
+      // Экспорт для ручного пинка: __polisolSyncBatch()
+      window.__polisolSyncBatch = syncOnce;
+
+      // Хуки и «липкий» наблюдатель, чтобы поймать перерисовку при возврате
+      function init() {
+            syncOnce();
+            try { Ecwid.OnPageLoaded.add(syncOnce); } catch { }
+            try { Ecwid.OnPageSwitch.add(syncOnce); } catch { }
+            try { Ecwid.OnCartChanged.add(syncOnce); } catch { }
+            // наблюдаем зону деталей товара — как только Ecwid дорисовал селект, синхронизируем
+            const root = document.querySelector('.product-details') || document.body;
+            try {
+                  let t = 0; new MutationObserver(() => { clearTimeout(t); t = setTimeout(syncOnce, 80); })
+                        .observe(root, { childList: true, subtree: true });
+            } catch { }
+      }
+
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+      else init();
+})();
+
 
